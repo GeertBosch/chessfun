@@ -100,7 +100,10 @@ and the Apple Terminal.app support this to some extent, though I managed to cras
 times with unfortunate font selections, particularly involving TrueType fonts. When it worked, the
 rendering took 7 seconds and the result was clearly an enlarged low resolution bitmap, on par with
 the "Too Blocky 8-bit" example above, so I disqualified this option. Without further ado, here are
-the final, best, submissions. The command used was `fen2txt -s brown`:
+the final, best, submissions. The command used was:
+```
+./fen2txt -s brown 4rb1k/2pqn2p/6pn/ppp3N1/P1QP2b1/1P2p3/2B3PP/B3RRK1
+```
 
 |                         VS Code 1.92.0                          |                          XTerm 378                          |                         Apple Terminal 543                          |                           lichess.org                           |
 | :-------------------------------------------------------------: | :---------------------------------------------------------: | :-----------------------------------------------------------------: | :-------------------------------------------------------------: |
@@ -147,7 +150,14 @@ experimenting, Safari displayed them beautifully.
 and the corresponding `xmlns` namespace, even though it's being deprecated from SVG 2.0 onward. I
 ended up making the [chessboard.svg](chessboard.svg) file self-contained and drawing the six pieces
 in both colors on a 3x4 sized board. This allows for easy real-time visual previewing while editing
-the definitions in VSCode. Three board styles are pre-defined: brown, green and paper.
+the definitions in VSCode. Three board styles are pre-defined: brown, green and paper. I used the following
+command to create the images (substituting the style):
+ ```
+ ./fen2svg -tg32x16 -s brown r4rk1/p7/bpn1ppqp/3pP3/P2Nn1Q1/1Pb1RNPP/5PB1/3R2K1
+ ```
+ While output is a little slower here, it's still barely noticeable. The timing difference between the
+ styles is just noise and is not consistent run to run.
+
 
 |                        _(preview)_                         |                         brown                          |                         green                          |                         paper                          |
 | :--------------------------------------------------------: | :----------------------------------------------------: | :----------------------------------------------------: | :----------------------------------------------------: |
