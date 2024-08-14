@@ -1,0 +1,158 @@
+#!/bin/bash
+TXT_CHESS_PIECES=${TXT_CHESS_PIECES:-auto}   # Whether to use Unicode chess pieces
+# TXT_CHESS_STYLE # If not empty, the style to use
+# TXT_CHESS_OUT  # If not empty, the output file to use
+
+# Load the textfun library from the same directory as this script
+source "$(dirname "${BASH_SOURCE}")/textfun.sh"
+
+# Try and determine the terminal capabilities
+if [ -t 1 ] ; then
+    have_unicode=
+    check_unicode "♙" &>/dev/null && have_unicode=1 # discard warnings
+    is_real_xterm=
+    test -n "$XTERM_VERSION" && is_real_xterm=1
+    is_apple_terminal=
+    test "$TERM_PROGRAM" = "Apple_Terminal" && is_apple_terminal=1
+fi
+
+set_chess_style() {
+    case $1 in
+        none|gnu|stock|boxed|pixelart) ;;
+        brown) TXT_CHESS_LIGHT_SQUARE=223 ; TXT_CHESS_DARK_SQUARE=137 ;;
+        green) TXT_CHESS_LIGHT_SQUARE=187 ; TXT_CHESS_DARK_SQUARE=64 ;;
+        gray) TXT_CHESS_LIGHT_SQUARE=254 ; TXT_CHESS_DARK_SQUARE=248 ;;
+        *) echo "Invalid style: $1" >&2 ; usage >&2 ;;
+    esac
+    TXT_CHESS_STYLE=$1
+}
+
+auto_chess_style() {
+    if [ ! -t 1 ] ; then
+        set_chess_style none
+    elif [ -n "$have_unicode"  ] ; then
+        if [ "$TXT_CHESS_PIECES" = "auto" ] ; then
+            # Don't default to using chess pieces on plain X11 xterms, as the bitmapped fonts
+            # are often bad.
+            if [ -n "$is_real_xterm" ] ; then
+                TXT_CHESS_PIECES=
+            else
+                TXT_CHESS_PIECES=1
+            fi
+        fi
+        # Letter chess-pieces look better on a boxed board. On plain X11 xterm, also default to
+        # boxed representation as bitmapped fonts may not have the required half block characters.
+        if [ -z "$TXT_CHESS_PIECES" -o -n "$is_real_xterm" ] ; then
+            set_chess_style boxed
+        else
+            set_chess_style green
+        fi
+    else
+        TXT_CHESS_PIECES=
+        set_chess_style gray
+    fi
+}
+
+usage() {
+    echo "Usage: $0 [-o outfile] [-s style] <fen>"
+    echo "  -c          Use Unicode chess pieces"
+    echo "  -h          Display this help message"
+    echo "  -o outfile  Output file (default: standard output)"
+    echo "  -s style    Style of the squares on the chess board"
+    echo "                auto: (default) Guess output style for terminals, otherwise \"none\""
+    echo "                none: No styling, plain ASCII, '.' for empty squares"
+    echo "                gnu:  GNU Chess style, same as above but spaced out"
+    echo "                stock: Stockfish style, ASCII art with KQRBNPkqrbnp pieces"
+    echo "                boxed: Unicode box drawing characters"
+    echo "                brown, green, gray: Checkered grid with light and dark squares"
+    echo "                pixelart: Use simple 8-bit style block graphics"
+    echo "  fen         FEN piece placement (default: standard starting position)"
+    exit 1
+}
+
+if [ -n "$TXT_CHESS_STYLE" ] ; then
+    set_chess_style "$TXT_CHESS_STYLE"
+fi
+
+# Process the command line options
+while getopts "cho:s:" opt ; do
+    case $opt in
+        c) TXT_CHESS_PIECES=1 ;;
+        h) usage >&2 ;;
+        o) TXT_CHESS_OUT="$OPTARG" ;;
+        s) set_chess_style "$OPTARG" || usage &> 2 ;;
+        *) echo "Invalid option: $opt" ; usage &> 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ -z "$TXT_CHESS_STYLE" ] ; then
+    auto_chess_style
+fi
+
+if [ "$TXT_CHESS_PIECES" = "auto" ] ; then
+    TXT_CHESS_PIECES=
+fi
+
+# This script takes a chess FEN piece placement and outputs a text file that shows
+# the chessboard with that setup.
+if [ $# -lt 1 ] ; then
+    fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+else
+    fen=$1
+fi
+
+# Sanity check the argument - maybe be more flexible?
+if [[ ! ("$fen" =~ ^([rnbqkpRNBQKP1-8]{1,8}/){7}[rnbqkpRNBQKP1-8]{1,8}$) ]] ; then
+    echo "Invalid FEN piece placement: $fen" >&2
+    usage >&2
+    exit 1
+fi
+
+fen_expand() {
+        if (($# != 1)) ; then
+                echo "$0 <fen>"
+                exit 1
+        fi
+        dots=""
+        exp=$1
+        for i in $(seq 8) ; do
+                dots=".$dots"
+                exp=${exp//$i/$dots}
+        done
+        echo "$exp" | tr '/' '\n'
+}
+
+output_txt() {
+    echo "$(fen_expand $fen)" | (
+        # Choose ASCII pieces, Unicode pieces, or pixelart
+        if [ $TXT_CHESS_STYLE = "pixelart" ] ; then
+            chess_art $TXT_CHESS_LIGHT_SQUARE $TXT_CHESS_DARK_SQUARE
+        elif [ -n "$TXT_CHESS_PIECES" ] ; then
+            chess_chars
+        else
+            cat
+        fi ) | (
+    case $TXT_CHESS_STYLE in
+        stock) ascii_grid -w ;;
+        boxed) unicode_grid -w ;;
+        gnu) sed -e "s/./& /g " -e "s/ $//" ;;
+        brown|green|gray)
+            if [ -n "$have_unicode" ] ; then
+                chess_chars | checkered_grid -w $TXT_CHESS_LIGHT_SQUARE $TXT_CHESS_DARK_SQUARE | (
+                    if [ -n "$is_apple_terminal" ] ; then large_lines ; else cat ; fi )
+            else
+                # Likely a plain xterm so try DECDWL sequence, ignored if not supported
+                checkered_grid $TXT_CHESS_LIGHT_SQUARE $TXT_CHESS_DARK_SQUARE | wide_lines
+            fi ;;
+        *) cat ;;
+    esac
+    )
+}
+
+# Output the TXT to the standard output or to a file
+if [ -n "$TXT_CHESS_OUT" ] ; then
+    output_txt > "$TXT_CHESS_OUT"
+else
+    output_txt
+fi

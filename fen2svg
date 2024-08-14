@@ -1,0 +1,152 @@
+#!/bin/bash
+SVG_CHESS_DEFS="${SVG_CHESS_DEFS:-${BASH_SOURCE%/*}/chessboard.svg}" # piece & board definitions
+SVG_CHESS_GRID=45 # Size of each square on the chess board. Depends on the SVG definitions.
+SVG_CHESS_XLINK= # Set to use xlink:href instead of href for compatibility. Deprecated in SVG 2.0.
+SVG_CHESS_STYLE=brown # One of brown, green, paper. Style of the squares on the chess board.
+SVG_CHESS_OUT=
+SVG_CHESS_TMP="${TMPDIR:-/tmp}/fen2svg-$$.svg"
+#SVG_CHESS_TIMG      Set to run timg to display the SVG file when outputting to a terminal
+#SVG_CHESS_TIMG_SIZE Set to pass target size in columns x rows to timg
+#SVG_CHESS_TIMG_OPT  Set to pass additional options to timg
+
+usage() {
+    echo "Usage: $0 [-d defs] [-o outfile] [-s style] [-x] [fen]"
+    echo "  -d defs     SVG file with the chess piece and board definitions"
+    echo "  -g size     Sets the size to specified columns x rows, example: -g 40x20"
+    echo "  -o outfile  Output file (default: standard output)"
+    echo "  -s style    Style of the squares on the chess board (brown, green, paper)"
+    echo "  -t          Use timg to display the SVG file (requires timg)"
+    echo "  -u          Pass the --upscale=i option to timg"
+    echo "  -x          Use xlink:href for compatibility (deprecated in SVG 2.0)"
+    echo "  fen         FEN piece placement (default: standard starting position)"
+    exit 1
+}
+
+# Process the command line options
+while getopts "d:g:o:s:tux" opt ; do
+    case $opt in
+        d) SVG_CHESS_DEFS="$OPTARG" ;;
+        g) SVG_CHESS_TIMG_SIZE="$OPTARG" ;;
+        h) usage ;;
+        o) SVG_CHESS_OUT=$OPTARG ;;
+        s) if [[ ! $OPTARG =~ brown|green|paper ]] ; then
+                echo "Invalid style: \"$OPTARG\"" >&2
+                usage >&2
+           fi
+           SVG_CHESS_STYLE=$OPTARG ;;
+        t) SVG_CHESS_TIMG=$(which timg)
+              if [ -z "$SVG_CHESS_TIMG" ] ; then
+                echo "timg not found in PATH" >&2
+                exit 2
+              fi
+        ;;
+        u) SVG_CHESS_TIMG_OPT="--upscale=i" ;;
+        x) SVG_CHESS_XLINK=1 ;;
+        *) usage ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+# This script takes a chess FEN piece placement and outputs an SVG file that shows
+# the chessboard with that setup.
+if [ $# -lt 1 ] ; then
+    fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+else
+    fen=$1
+fi
+
+if [[ ! ("$fen" =~ ^([rnbqkpRNBQKP1-8]{1,8}/){7}[rnbqkpRNBQKP1-8]{1,8}$) ]] ; then
+    echo "Invalid FEN piece placement: \"$fen\"" >&2
+    usage >&2
+fi
+
+if [ ! -f "$SVG_CHESS_DEFS" ] ; then
+    echo "Missing input SVG chessboard definition file: $SVG_CHESS_DEFS" >&2
+    exit 2
+fi
+
+if [ -n "$SVG_CHESS_TIMG" -a ! -x "$SVG_CHESS_TIMG" ] ; then
+    "timg not executable: $SVG_CHESS_TIMG" >&2
+    exit 2
+fi
+
+# Copy styles and definitions from the SVG definitions file
+copy_styles_and_defs() {
+    awk -v "xlink=$SVG_CHESS_XLINK" '/(desc|style|defs)[>]/ {
+        show = !show
+        print
+        next
+    }
+    show {
+        if (xlink) sub(/ href=/, " xlink:href=")
+        print
+    }
+    ' "$SVG_CHESS_DEFS"
+}
+
+# Create the board
+create_board() {
+    href=href
+    if [ -n "$SVG_CHESS_XLINK" ] ; then
+        href=xlink:href
+    fi
+    echo "  <use id="\"board\"" $href=\"#chessboard\" class=\"${SVG_CHESS_STYLE}-board\" />"
+}
+
+# Place the pieces
+place_pieces() {
+    xpos=0
+    ypos=0
+    files="abcdefgh"
+    for ((i = 0; i < ${#fen}; ++i)) ; do
+        char=${fen:i:1}
+        case $char in
+            1 | 2 | 3 | 4 | 5 | 6 | 7 | 8) xpos=$((xpos + char)) ;;
+            /) xpos=0; ypos=$((ypos + 1)) ;;
+            k | K | q | Q | r | R | b | B | n | N | p | P)
+                square=${files:xpos:1}$((ypos + 1))
+                echo -n "  <use id=\"$square\" $href=\"#$char\""
+                echo " x=\"$((xpos * SVG_CHESS_GRID))\" y=\"$((ypos * SVG_CHESS_GRID))\" />"
+                xpos=$((xpos + 1)) ;;
+        esac
+    done
+}
+
+output_svg() {
+    size=$((8 * $SVG_CHESS_GRID))
+
+    echo -n "<svg xmlns=\"http://www.w3.org/2000/svg\""
+    if [ -n "$SVG_CHESS_XLINK" ] ; then
+        echo -n " xmlns:xlink=\"http://www.w3.org/1999/xlink\""
+    fi
+    echo " width=\"$size\" height=\"$size\">"
+
+    copy_styles_and_defs
+    create_board
+    place_pieces
+    echo "</svg>"
+}
+
+get_timg_opts() {
+    local opts="${SVG_CHESS_TIMG_OPT} --color8" # 256 colors are always sufficient, avoids trouble
+    if [ -n "$SVG_CHESS_TIMG_SIZE" ] ; then
+        opts="$opts -a -g${SVG_CHESS_TIMG_SIZE}"
+    fi
+    echo "$opts"
+}
+
+# Output the SVG to the standard output or to a file
+if [ -n "$SVG_CHESS_OUT" ] ; then
+    output_svg > "$SVG_CHESS_OUT"
+elif [ -t 1 -a -x "$SVG_CHESS_TIMG" ] ; then
+    # Try to be helpful by leaving text under the image: it will be overwritten on graphics
+    # capable terminals, except for the "paper" style which is largely transparent.
+    if [ "$SVG_CHESS_STYLE" != "paper" ] ; then
+        printf "Terminal supports images?\r"
+    fi
+    output_svg > "$SVG_CHESS_TMP"
+    "$SVG_CHESS_TIMG" $(get_timg_opts) "$SVG_CHESS_TMP"
+    rm -f "$SVG_CHESS_TMP"
+else
+    output_svg
+fi

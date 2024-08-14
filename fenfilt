@@ -1,0 +1,59 @@
+#!/bin/bash
+
+FEN2SVG="${FEN2SVG:-${BASH_SOURCE%/*}/fen2svg}"
+# FILT_REQ= Set to require certain pieces to exist on the board (. is empty square)
+# FILT_SIDE= Set to require a certain side to be the active player
+
+if [ -n "$1" ] ; then
+    FILT_REQ="$1"
+fi
+if [ -n "$2" ] ; then
+    echo "set FILT_SIDE to $2"
+    FILT_SIDE="$2"
+fi
+echo "FILT_SIDE=$FILT_SIDE"
+# The FEN is passed with the placement in the first, and the other 5 fields in the second argument.
+# Returns failure if and only if the passed position doesn't match FILT_REQ and FILT_SIDE .
+match_fen() {
+    local count
+    local char
+    if [ -n "$FILT_SIDE" -a "$2" != "$FILT_SIDE" ] ; then
+        return 1
+    fi
+    for (( i = 0; i < ${#1}; ++i )) ; do
+        LC_CTYPE=C printf -v char '%d' "'${1:i:1}"
+        if [ $char -ge 32 -a $char -lt 127 ] ; then
+            ((++count[char]))
+        fi
+    done
+    for (( i = 0; i < ${#FILT_REQ}; ++i )) ; do
+        LC_CTYPE=C printf -v char '%d' "'${FILT_REQ:i:1}"
+        if [ "${count[$char]:-0}" -eq 0 ] ; then
+            return 1 # no match
+        fi
+        ((--count[$char]))
+    done
+    return 0
+}
+
+output_fen() {
+    if match_fen $1 $2 ; then
+        "$FEN2SVG" -tg40 "$1"
+    fi
+}
+
+filter_lines() {
+    while read line ; do
+        # (.[wb].[kqKQa-h]{1-4} [a-h1-8-]{1-2}.[0-9]{1-3}.[0-9]{1-3})?(.*)
+        echo "$line"
+        if [[ ("$line" =~ (([rnbqkpRNBQKP1-8]{1,8}/){7}[rnbqkpRNBQKP1-8]{1,8})( [wb] [kqKQa-h-]{1,4} [a-h1-8-]{1,2} [0-9]{1,3} [0-9]{1,3})?) ]] ; then
+            output_fen ${BASH_REMATCH[1]} ${BASH_REMATCH[3]:1}
+        fi
+    done
+}
+
+if [ -t 0 ] ; then
+    echo "Not reading from terminal"
+else
+    filter_lines
+fi
