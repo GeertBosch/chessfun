@@ -169,6 +169,6 @@ I was able to push a pure text solution further than I imagined, but I'm excited
 rediscovering the value of printing arbitrary graphics to the terminal. Going forward, I'll use the
 double sized characters in the Apple Terminal, and bitmaps in my other environments. Problem solved!
 Oh, and about chess: The example boards are puzzles from mate-in-1 to mate-in-6, from the
-[lichess.org](https://lichess.org/study/IPtfJlNl) site. I'm thankful for so many excellent freely
+[lichess.org](https://lichess.org/study/IPtfJlNl) site, White to move. No castling rights. I'm thankful for so many excellent freely
 usable resources.
 
