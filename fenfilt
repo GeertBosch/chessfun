@@ -1,6 +1,7 @@
 #!/bin/bash
 
 FEN2SVG="${FEN2SVG:-${BASH_SOURCE%/*}/fen2svg}"
+FEN2TXT="${FEN2TXT:-${BASH_SOURCE%/*}/fen2txt}"
 # FILT_REQ= Set to require certain pieces to exist on the board (. is empty square)
 # FILT_SIDE= Set to require a certain side to be the active player
 
@@ -38,7 +39,7 @@ match_fen() {
 
 output_fen() {
     if match_fen $1 $2 ; then
-        "$FEN2SVG" -tg40 "$1"
+        "$FEN2SVG" -lt "$1"
     fi
 }
 

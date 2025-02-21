@@ -3,6 +3,7 @@ SVG_CHESS_DEFS="${SVG_CHESS_DEFS:-${BASH_SOURCE%/*}/chessboard.svg}" # piece & b
 SVG_CHESS_GRID=45 # Size of each square on the chess board. Depends on the SVG definitions.
 SVG_CHESS_XLINK= # Set to use xlink:href instead of href for compatibility. Deprecated in SVG 2.0.
 SVG_CHESS_STYLE=brown # One of brown, green, paper. Style of the squares on the chess board.
+SVG_CHESS_LABEL=
 SVG_CHESS_OUT=
 SVG_CHESS_TMP="${TMPDIR:-/tmp}/fen2svg-$$.svg"
 #SVG_CHESS_TIMG      Set to run timg to display the SVG file when outputting to a terminal
@@ -13,6 +14,7 @@ usage() {
     echo "Usage: $0 [-d defs] [-o outfile] [-s style] [-x] [fen]"
     echo "  -d defs     SVG file with the chess piece and board definitions"
     echo "  -g size     Sets the size to specified columns x rows, example: -g 40x20"
+    echo "  -l          Adds rank and file labels"
     echo "  -o outfile  Output file (default: standard output)"
     echo "  -s style    Style of the squares on the chess board (brown, green, paper)"
     echo "  -t          Use timg to display the SVG file (requires timg)"
@@ -23,11 +25,12 @@ usage() {
 }
 
 # Process the command line options
-while getopts "d:g:o:s:tux" opt ; do
+while getopts "d:g:lo:s:tux" opt ; do
     case $opt in
         d) SVG_CHESS_DEFS="$OPTARG" ;;
         g) SVG_CHESS_TIMG_SIZE="$OPTARG" ;;
         h) usage ;;
+        l) SVG_CHESS_LABEL=1 ;;
         o) SVG_CHESS_OUT=$OPTARG ;;
         s) if [[ ! $OPTARG =~ brown|green|paper ]] ; then
                 echo "Invalid style: \"$OPTARG\"" >&2
@@ -90,7 +93,11 @@ create_board() {
     if [ -n "$SVG_CHESS_XLINK" ] ; then
         href=xlink:href
     fi
-    echo "  <use id="\"board\"" $href=\"#chessboard\" class=\"${SVG_CHESS_STYLE}-board\" />"
+    echo "  <use id="\"board\"" $href=\"#chessboard\" class=\"${SVG_CHESS_STYLE} board\"/>"
+    if [ -n "$SVG_CHESS_LABEL" ] ; then
+        echo "  <use id="\"darklabel\"" $href=\"#darklabel\" class=\"dark ${SVG_CHESS_STYLE}\"/>"
+        echo "  <use id="\"lightlabel\"" $href=\"#lightlabel\" class=\"light ${SVG_CHESS_STYLE}\"/>"
+    fi
 }
 
 # Place the pieces

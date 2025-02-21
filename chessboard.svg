@@ -8,7 +8,7 @@
   <style>
     .outline {
       stroke: #fff;
-      stroke-width: 3;
+      stroke-width: 2;
     }
 
     .piece {
@@ -18,17 +18,51 @@
       stroke-linejoin: round;
     }
 
-    .paper-board {
+    text {
+      font-size: 9px;
+      font-weight: bold;
+      font-family: sans-serif;
+    }
+
+    .paper.board {
       fill: url(#hatch2x2);
     }
 
-    .green-board {
+    .light.paper {
+      fill: #000;
+      stroke: #fff;
+      stroke-width: .25;
+    }
+    .dark.paper {
+      fill: #000;
+      stroke: #fff;
+      stroke-width: .25;
+    }
+
+    .green.board {
       fill: url(#green2x2);
     }
 
-    .brown-board {
+    .light.green {
+      fill: #eec;
+    }
+
+    .dark.green {
+      fill: #795;
+    }
+
+    .brown.board {
       fill: url(#brown2x2);
     }
+
+    .dark.brown {
+      fill: #b86;
+    }
+
+    .light.brown {
+      fill: #edb;
+    }
+
   </style>
   <defs>
     <!-- king -->
@@ -170,14 +204,38 @@
       <use href="#dsq" fill="#795" />
     </pattern>
     <pattern id="brown2x2" width="90" height="90" patternUnits="userSpaceOnUse">
-      <use href="#lsq" fill="#edb" />
-      <use href="#dsq" fill="#b86" />
+      <use href="#lsq" class="light brown" />
+      <use href="#dsq" class="dark brown" />
     </pattern>
     <rect id="chessboard" width="100%" height="100%" />
+
+    <!-- labels -->
+    <text id="darklabel">
+      <tspan x="3" y="100%" dy="-80">2</tspan>
+      <tspan x="3" dy="-90 -90 -90 347">4</tspan>
+      <tspan x="3" dy="-90 -90 -90 347">6</tspan>
+      <tspan x="3" dy="-90 -90 -90 347">8</tspan>
+      <tspan x="83" y="100%" dy="-3">b</tspan>
+      <tspan x="173">d</tspan>
+      <tspan x="263">f</tspan>
+      <tspan x="353">h</tspan>
+    </text>
+    <text id="lightlabel">
+      <tspan x="3" y="100%" dy="-35">1</tspan>
+      <tspan x="3" dy="-90 -90 -90 302">3</tspan>
+      <tspan x="3" dy="-90 -90 -90 302">5</tspan>
+      <tspan x="3" dy="-90 -90 -90 302">7</tspan>
+      <tspan x="38" y="100%" dy="-3">a</tspan>
+      <tspan x="128" >c</tspan>
+      <tspan x="218" >e</tspan>
+      <tspan x="308" >g</tspan>
+    </text>
   </defs>
 
   <!-- test all pieces on a small board -->
-  <use href="#chessboard" class="brown-board" />
+  <use href="#chessboard" class="brown board"/>
+  <use href="#darklabel" class="dark brown"/>
+  <use href="#lightlabel" class="light brown"/>
   <use href="#k" x="0" />
   <use href="#K" x="0" y="90" />
   <use href="#q" x="45" />
