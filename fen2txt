@@ -109,6 +109,7 @@ if [[ ! ("$fen" =~ ^([rnbqkpRNBQKP1-8]{1,8}/){7}[rnbqkpRNBQKP1-8]{1,8}$) ]] ; th
     exit 1
 fi
 
+# Takes a FEN piece placement and output a 8x8 grid of pieces, with '.' for empty squares.
 fen_expand() {
         if (($# != 1)) ; then
                 echo "$0 <fen>"
@@ -127,7 +128,7 @@ output_txt() {
     echo "$(fen_expand $fen)" | (
         # Choose ASCII pieces, Unicode pieces, or pixelart
         if [ $TXT_CHESS_STYLE = "pixelart" ] ; then
-            chess_art $TXT_CHESS_LIGHT_SQUARE $TXT_CHESS_DARK_SQUARE
+            pixelart $TXT_CHESS_LIGHT_SQUARE $TXT_CHESS_DARK_SQUARE
         elif [ -n "$TXT_CHESS_PIECES" ] ; then
             chess_chars
         else

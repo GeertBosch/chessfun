@@ -53,7 +53,7 @@ eval
 
 output_fen() {
     if match_fen $1 $2 ; then
-        "$FEN2SVG" -tg40 "$1"
+        "$FEN2SVG" -ltg40 "$1"
         # "$FEN2TXT" "$1"
         if test -x "$(which stockfish)" ; then
             nnue "$1"
