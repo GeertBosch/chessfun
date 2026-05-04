@@ -3,6 +3,7 @@ SVG_CHESS_DEFS="${SVG_CHESS_DEFS:-${BASH_SOURCE%/*}/chessboard.svg}" # piece & b
 SVG_CHESS_GRID=45 # Size of each square on the chess board. Depends on the SVG definitions.
 SVG_CHESS_XLINK= # Set to use xlink:href instead of href for compatibility. Deprecated in SVG 2.0.
 SVG_CHESS_STYLE=brown # One of brown, green, paper. Style of the squares on the chess board.
+SVG_CHESS_FLIP= # Set to "flip" to fl show the perspective of the black pieces
 SVG_CHESS_LABEL=
 SVG_CHESS_OUT=
 SVG_CHESS_TMP="${TMPDIR:-/tmp}/fen2svg-$$.svg"
@@ -13,6 +14,7 @@ SVG_CHESS_TMP="${TMPDIR:-/tmp}/fen2svg-$$.svg"
 usage() {
     echo "Usage: $0 [-d defs] [-o outfile] [-s style] [-x] [fen]"
     echo "  -d defs     SVG file with the chess piece and board definitions"
+    echo "  -f          Flip the board around to show the perspective of the black pieces"
     echo "  -g size     Sets the size to specified columns x rows, example: -g 40x20"
     echo "  -l          Adds rank and file labels"
     echo "  -o outfile  Output file (default: standard output)"
@@ -20,7 +22,9 @@ usage() {
     echo "  -t          Use timg to display the SVG file (requires timg)"
     echo "  -u          Pass the --upscale=i option to timg"
     echo "  -x          Use xlink:href for compatibility (deprecated in SVG 2.0)"
-    echo "  fen         FEN piece placement (default: standard starting position)"
+    echo "  fen         FEN position or piece placement (default: standard starting position)"
+    echo "              Full FEN: <pieces> <side> <castling> <en_passant> <halfmove> <fullmove>"
+    echo "              Active side 'b' automatically flips the board perspective."
     exit 1
 }
 
@@ -63,12 +67,13 @@ chkfen() {
 }
 
 # Process the command line options
-while getopts "d:g:lo:s:tux" opt ; do
+while getopts "d:fg:lo:s:tux" opt ; do
     case $opt in
         d) SVG_CHESS_DEFS="$OPTARG" ;;
         g) SVG_CHESS_TIMG_SIZE="$OPTARG" ;;
         h) usage ;;
-        l) SVG_CHESS_LABEL=1 ;;
+        l) SVG_CHESS_LABEL=1  ;;
+        f) SVG_CHESS_FLIP="flip" ;;
         o) SVG_CHESS_OUT=$OPTARG ;;
         s) if [[ ! $OPTARG =~ brown|green|paper ]] ; then
                 echo "Invalid style: \"$OPTARG\"" >&2
@@ -88,12 +93,16 @@ while getopts "d:g:lo:s:tux" opt ; do
 done
 shift $((OPTIND - 1))
 
-# This script takes a chess FEN piece placement and outputs an SVG file that shows
-# the chessboard with that setup.
-if [ $# -lt 1 -o "$1" = "startpos" ] ; then
+[ $# -eq 1 ] && [[ "$1" == *" "* ]] && set -- $1 # treat single arg with spaces as multiple args
+
+# This script takes a chess FEN position and outputs an SVG file showing the chessboard.
+# Parse piece placement
+if [ $# -lt 1 ] || [ "$1" = "startpos" ] ; then
     fen="rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR"
+    [ $# -ge 1 ] && shift  # consume "startpos"
 else
     fen=$1
+    shift
 fi
 fen="${fen//_/1}" # allow _ to stand for no piece
 if ! chkfen "$fen" ; then
@@ -101,9 +110,19 @@ if ! chkfen "$fen" ; then
     exit 2
 fi
 
-if [[ ! ("$fen" =~ ^([rnbqkpRNBQKP1-8]{1,8}/){7}[rnbqkpRNBQKP1-8]{1,8}$) ]] ; then
-    echo "Invalid FEN piece placement: \"$fen\"" >&2
-    usage >&2
+# Parse active side (w/b); black automatically flips the board
+[ "$1" = "b" ] && SVG_CHESS_FLIP="flip"
+
+# Consume active side, castling rights, ep square, hm clock, and fullmove number if present
+[ $# -ge 1 ] && [[ "$1" =~ ^[wb]$ ]] && shift
+[ $# -ge 1 ] && [[ "$1" =~ ^(-|[KQkq]+)$ ]] && shift
+[ $# -ge 1 ] && [[ "$1" =~ ^(-|[a-h][36])$ ]] && shift
+[ $# -ge 1 ] && [[ "$1" =~ ^[0-9]+$ ]] && shift
+[ $# -ge 1 ] && [[ "$1" =~ ^[0-9]+$ ]] && shift
+
+# Actually flip the piece placement if needed (remaining args are UCI moves, not consumed)
+if [ -n "$SVG_CHESS_FLIP" ] ; then
+    fen=$(echo "$fen" | tr '/' '\n' | tail -r | rev | tr '\n' '/')
 fi
 
 if [ ! -f "$SVG_CHESS_DEFS" ] ; then
@@ -118,7 +137,8 @@ fi
 
 # Copy styles and definitions from the SVG definitions file
 copy_styles_and_defs() {
-    awk -v "xlink=$SVG_CHESS_XLINK" '/(desc|style|defs)[>]/ {
+    awk -v "xlink=$SVG_CHESS_XLINK" '
+    /(desc|style|defs)[>]/ {
         show = !show
         print
         next
@@ -138,8 +158,8 @@ create_board() {
     fi
     echo "  <use id="\"board\"" $href=\"#chessboard\" class=\"${SVG_CHESS_STYLE} board\"/>"
     if [ -n "$SVG_CHESS_LABEL" ] ; then
-        echo "  <use id="\"darklabel\"" $href=\"#darklabel\" class=\"dark ${SVG_CHESS_STYLE}\"/>"
-        echo "  <use id="\"lightlabel\"" $href=\"#lightlabel\" class=\"light ${SVG_CHESS_STYLE}\"/>"
+        echo "  <use id="\"darklabel\"" $href=\"#darklabel${SVG_CHESS_FLIP}\" class=\"dark ${SVG_CHESS_STYLE}\"/>"
+        echo "  <use id="\"lightlabel\"" $href=\"#lightlabel${SVG_CHESS_FLIP}\" class=\"light ${SVG_CHESS_STYLE}\"/>"
     fi
 }
 
