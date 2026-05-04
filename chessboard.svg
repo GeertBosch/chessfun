@@ -6,63 +6,22 @@
     See https://en.wikipedia.org/wiki/User:Cburnett/GFDL_images/Chess. CC BY-SA 3.0 license.
   </desc>
   <style>
-    .outline {
-      stroke: #fff;
-      stroke-width: 2;
-    }
+    .outline { stroke: #fff; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+    .piece { stroke: #000; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 
-    .piece {
-      stroke: #000;
-      stroke-width: 1.5;
-      stroke-linecap: round;
-      stroke-linejoin: round;
-    }
+    text { font-size: 9px; font-weight: bold; font-family: sans-serif; }
 
-    text {
-      font-size: 9px;
-      font-weight: bold;
-      font-family: sans-serif;
-    }
+    .paper.board { fill: url(#hatch2x2); }
+    .light.paper { fill: #000; stroke: #fff;  stroke-width: .3; }
+    .dark.paper { fill: #000; stroke: #fff; stroke-width: .3; }
 
-    .paper.board {
-      fill: url(#hatch2x2);
-    }
+    .green.board { fill: url(#green2x2); }
+    .light.green { fill: #eec; }
+    .dark.green { fill: #795; }
 
-    .light.paper {
-      fill: #000;
-      stroke: #fff;
-      stroke-width: .25;
-    }
-    .dark.paper {
-      fill: #000;
-      stroke: #fff;
-      stroke-width: .25;
-    }
-
-    .green.board {
-      fill: url(#green2x2);
-    }
-
-    .light.green {
-      fill: #eec;
-    }
-
-    .dark.green {
-      fill: #795;
-    }
-
-    .brown.board {
-      fill: url(#brown2x2);
-    }
-
-    .dark.brown {
-      fill: #b86;
-    }
-
-    .light.brown {
-      fill: #edb;
-    }
-
+    .brown.board { fill: url(#brown2x2); }
+    .dark.brown { fill: #b86; }
+    .light.brown { fill: #edb; }
   </style>
   <defs>
     <!-- king -->
@@ -193,28 +152,26 @@
     <!-- board -->
     <path id="lsq" d="M0 0h45v90h45V45H0z" />
     <path id="dsq" d="M0 45v45h45V0h45v45z" />
-    <pattern id="hatch" width="4.89" height="9" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
-      <line x1="0" y1="0" x2="0" y2="10" style="stroke:black; stroke-width:2" />
+    <pattern id="hatch" width="3.18" height="9" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+      <line x1="0" y1="0" x2="0" y2="10" style="stroke:black; stroke-width:0.7" />
     </pattern>
     <pattern id="hatch2x2" width="90" height="90" patternUnits="userSpaceOnUse">
       <use href="#lsq" fill="url(#hatch)" />
     </pattern>
     <pattern id="green2x2" width="90" height="90" patternUnits="userSpaceOnUse">
-      <use href="#lsq" fill="#eec" />
-      <use href="#dsq" fill="#795" />
+      <use href="#lsq" fill="#eec" /><use href="#dsq" fill="#795" />
     </pattern>
     <pattern id="brown2x2" width="90" height="90" patternUnits="userSpaceOnUse">
-      <use href="#lsq" class="light brown" />
-      <use href="#dsq" class="dark brown" />
+      <use href="#lsq" class="light brown" /><use href="#dsq" class="dark brown" />
     </pattern>
     <rect id="chessboard" width="100%" height="100%" />
 
     <!-- labels -->
     <text id="darklabel">
       <tspan x="3" y="100%" dy="-80">2</tspan>
-      <tspan x="3" dy="-90 -90 -90 347">4</tspan>
-      <tspan x="3" dy="-90 -90 -90 347">6</tspan>
-      <tspan x="3" dy="-90 -90 -90 347">8</tspan>
+      <tspan x="3" dy="-90">4</tspan>
+      <tspan x="3" dy="-90">6</tspan>
+      <tspan x="3" dy="-90">8</tspan>
       <tspan x="83" y="100%" dy="-3">b</tspan>
       <tspan x="173">d</tspan>
       <tspan x="263">f</tspan>
@@ -222,13 +179,34 @@
     </text>
     <text id="lightlabel">
       <tspan x="3" y="100%" dy="-35">1</tspan>
-      <tspan x="3" dy="-90 -90 -90 302">3</tspan>
-      <tspan x="3" dy="-90 -90 -90 302">5</tspan>
-      <tspan x="3" dy="-90 -90 -90 302">7</tspan>
+      <tspan x="3" dy="-90">3</tspan>
+      <tspan x="3" dy="-90">5</tspan>
+      <tspan x="3" dy="-90">7</tspan>
       <tspan x="38" y="100%" dy="-3">a</tspan>
       <tspan x="128" >c</tspan>
       <tspan x="218" >e</tspan>
       <tspan x="308" >g</tspan>
+    </text>
+    <!-- labels for a flipped board - requires even number of ranks and files -->
+    <text id="darklabelflip">
+      <tspan x="3" y="10">1</tspan>
+      <tspan x="3" dy="90">3</tspan>
+      <tspan x="3" dy="90">5</tspan>
+      <tspan x="3" dy="90">7</tspan>
+      <tspan x="100%" dx="-7" y="100%" dy="-3">a</tspan>
+      <tspan x="100%" dx="-97">c</tspan>
+      <tspan x="100%" dx="-186">e</tspan>
+      <tspan x="100%" dx="-276">g</tspan>
+    </text>
+    <text id="lightlabelflip">
+      <tspan x="3" y="55">2</tspan>
+      <tspan x="3" dy="90">4</tspan>
+      <tspan x="3" dy="90">6</tspan>
+      <tspan x="3" dy="90">8</tspan>
+      <tspan x="100%" dx="-52" y="100%" dy="-3">b</tspan>
+      <tspan x="100%" dx="-142">d</tspan>
+      <tspan x="100%" dx="-232">f</tspan>
+      <tspan x="100%" dx="-322">h</tspan>
     </text>
   </defs>
 
@@ -236,11 +214,11 @@
   <use href="#chessboard" class="brown board"/>
   <use href="#darklabel" class="dark brown"/>
   <use href="#lightlabel" class="light brown"/>
-  <use href="#k" x="0" />
+  <use href="#k" x="0" y="0" />
   <use href="#K" x="0" y="90" />
-  <use href="#q" x="45" />
+  <use href="#q" x="45" y = "0" />
   <use href="#Q" x="45" y="90" />
-  <use href="#r" x="90" />
+  <use href="#r" x="90" y="0" />
   <use href="#R" x="90" y="90" />
   <use href="#b" x="0" y="45" />
   <use href="#B" x="0" y="135" />
