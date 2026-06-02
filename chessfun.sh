@@ -241,53 +241,17 @@ chessrow() {
 	bg1=$1
 	bg2=$2
 	row=$(echo "$3" | tr "." " ")
-		for (( i=0; i<${#row}; i++ )) ; do
-		piece=${row:$i:1}
-		case $piece in
-		"p")
-			piece="♟"
-			;;
-		"n")
-			piece="♞"
-			;;
-		"b")
-			piece="♝"
-			;;
-		"r")
-			piece="♜"
-			;;
-		"q")
-			piece="♛"
-			;;
-		"k")
-			piece="♚"
-			;;
-		"P")
-			piece="♙"
-			;;
-		"N")
-			piece="♘"
-			;;
-		"B")
-			piece="♗"
-			;;
-		"R")
-			piece="♖"
-			;;
-		"Q")
-			piece="♕"
-			;;
-		"K")
-			piece="♔"
-			;;
-		"." | '_')
-			piece=" "
-			;;
+	for (( i=0; i<${#row}; i++ )) ; do
+		ch=${row:$i:1}
+		case $ch in
+		"p") ch="♟" ;; "n") ch="♞" ;; "b") ch="♝" ;; "r") ch="♜" ;; "q") ch="♛" ;; "k") ch="♚" ;;
+		"P") ch="♙" ;; "N") ch="♘" ;; "B") ch="♗" ;; "R") ch="♖" ;; "Q") ch="♕" ;; "K") ch="♔" ;;
+		"." | '_') ch=" " ;;
 		esac
 		if [ $((i % 2)) == 0 ] ; then
-			printf "\\E[38;5;${bg1}m$rh\\E[48;5;${bg1}m\\E[38;5;0m$piece"
+			printf "\\E[38;5;${bg1}m$rh\\E[48;5;${bg1}m\\E[38;5;0m$ch"
 		else
-			printf "\\E[38;5;${bg1}m\\E[48;5;${bg2}m$lh\\E[38;5;0m$piece"
+			printf "\\E[38;5;${bg1}m\\E[48;5;${bg2}m$lh\\E[38;5;0m$ch"
 		fi
 	done
 	printf "\\E[49m\\E[38;5;${bg2}m$lh\\E[39m\\n"
@@ -321,15 +285,9 @@ flip() {
 	shift
 	if (($# >= 1)) ; then
 		case $1 in
-		b|B)
-			side=w
-			;;
-		w|W)
-			side=b
-			;;
-		*)
-			side=w
-			;;
+		b|B) side=w ;;
+		w|W) side=b ;;
+		*) side=w ;;
 		esac
 		echo -n " $side"
 		shift

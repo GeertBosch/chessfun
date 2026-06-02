@@ -214,16 +214,11 @@
   <use href="#chessboard" class="brown board"/>
   <use href="#darklabel" class="dark brown"/>
   <use href="#lightlabel" class="light brown"/>
-  <use href="#k" x="0" y="0" />
-  <use href="#K" x="0" y="90" />
-  <use href="#q" x="45" y = "0" />
-  <use href="#Q" x="45" y="90" />
-  <use href="#r" x="90" y="0" />
-  <use href="#R" x="90" y="90" />
-  <use href="#b" x="0" y="45" />
-  <use href="#B" x="0" y="135" />
+  <use href="#k" x="0" y="0" /> <use href="#q" x="45" y = "0" /> <use href="#r" x="90" y="0" />
+   <use href="#b" x="0" y="45" />
   <use href="#n" x="45" y="45" />
-  <use href="#N" x="45" y="135" />
-  <use href="#p" x="90" y="45" />
-  <use href="#P" x="90" y="135" />
+     <use href="#p" x="90" y="45" />
+  <use href="#K" x="0" y="90" />   <use href="#B" x="0" y="135" />
+  <use href="#Q" x="45" y="90" />  <use href="#N" x="45" y="135" />
+  <use href="#R" x="90" y="90" />  <use href="#P" x="90" y="135" />
 </svg>

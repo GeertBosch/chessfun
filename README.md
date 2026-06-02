@@ -3,13 +3,13 @@ _( ... or how we go down the rabbit hole of terminal capabilities )_
 
 ## Introduction
 When computers and chess cross paths, and especially when dabbling in chess programming, one common
-need is printing a chess position to the screen. The most used and compact format is the [Forsyth–Edwards
-Notation](https://en.wikipedia.org/wiki/Forsyth–Edwards_Notation) (FEN). This format lists all chess pieces using `KQRBNP` for white pieces, and `kqrbnp` for the
-black ones, a single digit between `1` and `8` to represent that number of empty squares, and
-slashes `/` to separate rows. So, the starting position is
-`rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR`. Other fields indicate the active player, en passant
-and castling rights, as well as move counts. However, here I'd like to focus on showing what is
-called the piece placement.
+need is printing a chess position to the screen. The most used and compact format is the
+[Forsyth–Edwards Notation](https://en.wikipedia.org/wiki/Forsyth–Edwards_Notation) (FEN). This
+format lists all chess pieces using `KQRBNP` for white pieces, and `kqrbnp` for the black ones, a
+single digit between `1` and `8` to represent that number of empty squares, and slashes `/` to
+separate rows. So, the starting position is `rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR`. Other
+fields indicate the active player, en passant and castling rights, as well as move counts. However,
+here I'd like to focus on showing what is called the piece placement.
 
 All images in this README were generated using code in this repository, and then captured directly
 off of the terminal screen, except where explicit mentioned otherwise.
@@ -17,8 +17,8 @@ off of the terminal screen, except where explicit mentioned otherwise.
 ## Just Print It!
 How hard can it be? We print the 64 positions in a rectangular grid. Done. OK, the empty space make
 it hard to see the actual location of the pieces, so in come the dots. The normally excellent space
-adjustments by the [Fira Code](https://github.com/tonsky/FiraCode) font are not helpful here, but really the board isn't at all square. After
-adding spaces, it's at least usable.
+adjustments by the [Fira Code](https://github.com/tonsky/FiraCode) font are not helpful here, but
+really the board isn't at all square. After adding spaces, it's at least usable.
 
 GNU Chess 6.2.9 sticks with this third try and calls it a day. That's fair. Chess programs generally
 implement a protocol like the Universal Chess Interface and delegate the UI to a graphical interface
@@ -32,11 +32,11 @@ terminal, directly interacting with code and chess positions from the command li
 
 ## What about Unicode?
 Even in the old IBM PC days, there were some box drawing characters to improve things. Going a bit
-further, letters and boxes are great and all, but with Unicode can't we actually get some horsies and towers?
-Next up: ♘ and ♜! Oh, no, that's not great at all! Those guys are tiny and look lost on the large
-board and are not very readable! The chess symbols are letter sized, and take up a single space,
-unlike Emoji that take up a more space. I didn't realize that until now: even in a monospaced font,
-there are wider characters.
+further, letters and boxes are great and all, but with Unicode can't we actually get some horsies
+and towers? Next up: ♘ and ♜! Oh, no, that's not great at all! Those guys are tiny and look lost on
+the large board and are not very readable! The chess symbols are letter sized, and take up a single
+space, unlike Emoji that take up a more space. I didn't realize that until now: even in a monospaced
+font, there are wider characters.
 
 <img src="img/x-1.png" height="75">
 
@@ -80,19 +80,20 @@ chess figures with a checkered chessboard using ANSI colors.
 |               0 spaces                |                1 space                |               2 spaces                |                 how?!                 |
 
 We can actually get a single space between the chess pieces by taking advantage of the left and
-right half block Unicode characters: `▌` (U+2580) and `▐` (U+2584). By putting one of these between the pieces with
-the foreground set to the light square color and the background to the dark square color, we can
-simulate half spaces. On the edges of the board, special care needs to be taken to use the default
-background color: use the right half block on the left edge and the left half block on the right
-edge. While this seems to work on many terminals, good results may require adjusting the font, line
-spacing, or both. In this case, I used Fira Code size 13 with a line spacing of 0.84.
+right half block Unicode characters: `▌` (U+2580) and `▐` (U+2584). By putting one of these between
+the pieces with the foreground set to the light square color and the background to the dark square
+color, we can simulate half spaces. On the edges of the board, special care needs to be taken to use
+the default background color: use the right half block on the left edge and the left half block on
+the right edge. While this seems to work on many terminals, good results may require adjusting the
+font, line spacing, or both. In this case, I used Fira Code size 13 with a line spacing of 0.84.
 
 ## As the Smoke Clears... Victory?
 Not quite. Some platforms render the chess pieces in a quite an awful manner, or not at all. In
 particular, plain actual XTerm windows may have font issues. The chess figures remain very small, so
 the board size is limited to 16x8 character cells. About double that size would be more comfortable
 to read. Also, because the pieces are rendered in a single color, white pieces are really just a
-black outline. Similarly, black pieces don't have a contrasting highlight color to make them easier to read.
+black outline. Similarly, black pieces don't have a contrasting highlight color to make them easier
+to read.
 
 There's one last ANSI escape sequence to deploy: the DEC terminal DECDHL double-width double-height
 escape sequences: `\033#3` for the top half, and `\033#4` for the bottom half. Both plain old XTerm
@@ -113,14 +114,15 @@ the final, best, submissions. The command used was:
 In evaluating all output, I have taken a line height to be 15 units in this document. VSCode is 1
 line height per chess square, as these are just chess characters on subsequent lines. Apple Terminal
 has twice the height due to the DECDHL effect. A few things become obvious: VS Code and XTerm output
-is just too small to be very legible. While the Apple Terminal puts in the best performance by far, it's
-not perfect. The left and right edges of the board show banding due to the foreground and background
-palettes not being exactly the same.
+is just too small to be very legible. While the Apple Terminal puts in the best performance by far,
+it's not perfect. The left and right edges of the board show banding due to the foreground and
+background palettes not being exactly the same.
 
-All boards take much less than 0.1s to output on my M1 MacBook Pro. For the [lichess.org](https://lichess.org) site, I tried to record a
-video to show the latency between me causing the website to load and taking the picture, but I
-failed. What matters is that all methods are fast. In fact, there is no measurable difference
-routing output to `/dev/null`: the terminal doesn't slow us down.
+All boards take much less than 0.1s to output on my M1 MacBook Pro. For the
+[lichess.org](https://lichess.org) site, I tried to record a video to show the latency between me
+causing the website to load and taking the picture, but I failed. What matters is that all methods
+are fast. In fact, there is no measurable difference routing output to `/dev/null`: the terminal
+doesn't slow us down.
 
 ## Back to the Future
 
@@ -150,13 +152,13 @@ experimenting, Safari displayed them beautifully.
 and the corresponding `xmlns` namespace, even though it's being deprecated from SVG 2.0 onward. I
 ended up making the [chessboard.svg](chessboard.svg) file self-contained and drawing the six pieces
 in both colors on a 3x4 sized board. This allows for easy real-time visual previewing while editing
-the definitions in VSCode. Three board styles are pre-defined: brown, green and paper. I used the following
-command to create the images (substituting the style):
+the definitions in VSCode. Three board styles are pre-defined: brown, green and paper. I used the
+following command to create the images (substituting the style):
  ```
  ./fen2svg -tg32x16 -s brown r4rk1/p7/bpn1ppqp/3pP3/P2Nn1Q1/1Pb1RNPP/5PB1/3R2K1
  ```
- While output is a little slower here, it's still barely noticeable. The timing difference between the
- styles is just noise and is not consistent run to run.
+ While output is a little slower here, it's still barely noticeable. The timing difference between
+ the styles is just noise and is not consistent run to run.
 
 
 |                        _(preview)_                         |                         brown                          |                         green                          |                         paper                          |
@@ -169,6 +171,6 @@ I was able to push a pure text solution further than I imagined, but I'm excited
 rediscovering the value of printing arbitrary graphics to the terminal. Going forward, I'll use the
 double sized characters in the Apple Terminal, and bitmaps in my other environments. Problem solved!
 Oh, and about chess: The example boards are puzzles from mate-in-1 to mate-in-6, from the
-[lichess.org](https://lichess.org/study/IPtfJlNl) site, White to move. No castling rights. I'm thankful for so many excellent freely
-usable resources.
+[lichess.org](https://lichess.org/study/IPtfJlNl) site, White to move. No castling rights. I'm
+thankful for so many excellent freely usable resources.
 
