@@ -33,7 +33,9 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
 #include <fstream>
 #include <iostream>
@@ -135,6 +137,66 @@ bool terminalSupportsGraphics() {
         return true;
     }();
     return supported;
+}
+
+// The pixel size of one character cell, used to convert an image's pixel footprint (read from the
+// sixel it produces) into a number of text rows/columns to reserve. Determined once and cached.
+struct CellSize { int w; int h; };
+
+// Ask the terminal for its cell size with the CSI 16 t report: it replies "ESC [ 6 ; H ; W t".
+// Done over /dev/tty (not stdout) so it works even when our output is piped to a pager, and in raw
+// mode with a short timeout so the reply is not echoed, line-buffered, or able to hang us. Returns
+// {0,0} if there is no controlling terminal or it doesn't answer.
+CellSize queryCellSize16t() {
+    int fd = open("/dev/tty", O_RDWR | O_NOCTTY);
+    if (fd < 0) return {0, 0};
+    struct termios saved {};
+    if (tcgetattr(fd, &saved) != 0) { close(fd); return {0, 0}; }
+    struct termios raw = saved;
+    raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 2;  // 0.2s between bytes before giving up
+    tcsetattr(fd, TCSANOW, &raw);
+    static const char query[] = "\033[16t";
+    CellSize cs{0, 0};
+    if (write(fd, query, sizeof query - 1) == static_cast<ssize_t>(sizeof query - 1)) {
+        std::string reply;
+        char c;
+        // Read until the report's terminating 't' (or the inter-byte timeout). The reply is short.
+        while (reply.size() < 32) {
+            ssize_t n = read(fd, &c, 1);
+            if (n <= 0) break;
+            reply += c;
+            if (c == 't') break;
+        }
+        // Parse "ESC [ 6 ; <height> ; <width> t". sscanf skips the ESC/[ for us via the literal.
+        int h = 0, w = 0;
+        if (std::sscanf(reply.c_str(), "\033[6;%d;%dt", &h, &w) == 2 && w > 0 && h > 0)
+            cs = {w, h};
+    }
+    tcsetattr(fd, TCSANOW, &saved);
+    close(fd);
+    return cs;
+}
+
+// Cell size in pixels, cached for the run. Preference order: the kernel's reported pixel size (no
+// round trip), then the CSI 16 t query, then a typical fallback. Only consulted when an image is
+// actually rendered, so non-image documents never pay for the query.
+CellSize cellPixelSize() {
+    static const CellSize cs = [] {
+        for (int fd : {STDOUT_FILENO, STDERR_FILENO, STDIN_FILENO}) {
+            struct winsize ws;
+            if (ioctl(fd, TIOCGWINSZ, &ws) == 0 && ws.ws_xpixel > 0 && ws.ws_ypixel > 0 &&
+                ws.ws_col > 0 && ws.ws_row > 0) {
+                int w = ws.ws_xpixel / ws.ws_col, h = ws.ws_ypixel / ws.ws_row;
+                if (w > 0 && h > 0) return CellSize{w, h};
+            }
+        }
+        CellSize q = queryCellSize16t();
+        if (q.w > 0 && q.h > 0) return q;
+        return CellSize{8, 16};  // a typical ~1:2 cell when nothing reports one
+    }();
+    return cs;
 }
 
 // ---------------------------------------------------------------------------
@@ -515,7 +577,11 @@ bool parseImgTag(const std::string& text, std::map<std::string, std::string>& at
 
 // Run timg to render `path` at W x H character cells with sixel graphics, returning its stdout.
 // Returns an empty string if timg cannot be launched or exits non-zero. The image data is captured
-// so that the multi-line vertical-reserve trick in renderImageBlock can wrap it.
+// (rather than letting timg draw straight to the terminal) for two reasons: with its stdout on a
+// pipe timg emits plain sixel without doing its own cursor/scroll positioning, so we can later
+// replay the bytes at whatever cursor position we choose; and we can read the painted pixel size
+// out of the sixel to compute an exact cell footprint. timg still detects the real cell size via
+// /dev/tty, so `-g` is honoured in actual character cells.
 std::string runTimg(const std::string& path, int W, int H) {
     std::ostringstream cmd;
     // -ps : sixel pixelation;  -g WxH : fit inside W x H character cells.  The path is passed via a
@@ -538,16 +604,37 @@ std::string runTimg(const std::string& path, int W, int H) {
     return out;
 }
 
-// If `text` (already trimmed) is a single <img> tag for a local PNG, render it as an image block and
-// return true, writing the block to `out` and its cell footprint to `cellWidth` / `cellHeight` (in
-// columns / rows). Otherwise return false and leave the outputs untouched. `availWidth` caps the
-// width in columns. On any failure to produce an image, the alt text (or literal tag) is returned
-// as a one-line block so callers can treat the result uniformly.
+// Read the painted pixel size out of a sixel data stream's raster attributes. A sixel begins
+// ESC P <params> q "Pan;Pad;Ph;Pv ... where Ph/Pv are the graphic's pixel width/height. We scan for
+// the '"' that introduces them and parse the last two of the four numbers. Returns false if absent
+// (older sixel without raster attributes), in which case callers fall back to the requested size.
+bool sixelPixelSize(const std::string& sixel, int& pw, int& ph) {
+    size_t q = sixel.find("\033P");
+    if (q == std::string::npos) return false;
+    size_t quote = sixel.find('"', q);
+    if (quote == std::string::npos) return false;
+    int pan = 0, pad = 0, w = 0, h = 0;
+    if (std::sscanf(sixel.c_str() + quote + 1, "%d;%d;%d;%d", &pan, &pad, &w, &h) == 4 && w > 0 &&
+        h > 0) {
+        pw = w;
+        ph = h;
+        return true;
+    }
+    return false;
+}
+
+// If `text` (already trimmed) is a single <img> tag for a local PNG, render it and return true,
+// writing the raw sixel bytes to `out` and the image's exact cell footprint to `cellWidth` /
+// `cellHeight` (columns / rows). Otherwise return false and leave the outputs untouched.
+// `availWidth` caps the width in columns. On any failure to produce an image, the alt text (or
+// literal tag) is returned as a one-line text block (cellHeight == 1) so callers can treat the
+// result uniformly.
 //
-// The rendered block follows the table-cell recipe: H-1 newlines reserve vertical space, an
-// ESC[<H-1>A moves the cursor back to the top of that space, and the timg sixel output is appended.
-// Emitted line by line (split on '\n'), the first H-1 lines are blank and the final line carries the
-// cursor-up plus the image, so the image paints across the rows the blank lines reserved.
+// `out` is the plain sixel as timg produced it — it does NOT position itself. The caller is
+// responsible for placing the cursor before replaying it: timg leaves the cursor at column 1 on the
+// row just below the image, so a sixel painted at the top of a reserved block lands within it. The
+// footprint is computed from the painted pixel size read back out of the sixel (which reflects
+// timg's aspect-preserving fit), divided by the real cell size — not from the requested -g box.
 bool renderImageBlock(const std::string& text, int availWidth, std::string& out, int& cellWidth,
                       int& cellHeight) {
     std::map<std::string, std::string> attrs;
@@ -597,10 +684,12 @@ bool renderImageBlock(const std::string& text, int availWidth, std::string& out,
     else if (haveW)     { tw = aw; th = std::max(1, ph * aw / pw); }
     else if (haveH)     { th = ah; tw = std::max(1, pw * ah / ph); }
 
-    // Pixels -> character cells: 8 px per column, 15 px per row. Clamp the width to the available
-    // columns, scaling the height to match so the aspect ratio of the chosen target is preserved.
-    int W = std::max(1, (tw + 7) / 8);
-    int H = std::max(1, (th + 14) / 15);
+    // Convert the target pixel size to a -g box in real character cells. timg detects the real cell
+    // size itself, so passing cells is correct; width is clamped to the available columns with the
+    // height scaled to match so the requested aspect ratio is preserved.
+    CellSize cell = cellPixelSize();
+    int W = std::max(1, (tw + cell.w - 1) / cell.w);
+    int H = std::max(1, (th + cell.h - 1) / cell.h);
     if (availWidth > 0 && W > availWidth) {
         H = std::max(1, H * availWidth / W);
         W = availWidth;
@@ -609,14 +698,35 @@ bool renderImageBlock(const std::string& text, int availWidth, std::string& out,
     std::string img = runTimg(src, W, H);
     if (img.empty()) return fallback("timg failed");
 
-    std::string block;
-    block.append(static_cast<size_t>(H - 1), '\n');
-    if (H > 1) block += "\033[" + std::to_string(H - 1) + 'A';
-    block += img;
-    out = block;
-    cellWidth = W;
-    cellHeight = H;
+    // Exact footprint from the painted pixel size (aspect-fit may make the image smaller than the
+    // requested box). Fall back to the requested W x H if the sixel lacks raster attributes.
+    int paintedW = 0, paintedH = 0;
+    if (sixelPixelSize(img, paintedW, paintedH)) {
+        cellWidth = std::max(1, (paintedW + cell.w - 1) / cell.w);
+        cellHeight = std::max(1, (paintedH + cell.h - 1) / cell.h);
+    } else {
+        cellWidth = W;
+        cellHeight = H;
+    }
+    out = img;
     return true;
+}
+
+// Whether `s` is sixel image data rather than a text fallback: a sixel contains a DCS introducer
+// (ESC P), which rendered inline text never does (it uses only ESC[ for SGR and ESC] for OSC 8).
+bool isSixelImage(const std::string& s) { return s.find("\033P") != std::string::npos; }
+
+// Emit a captured sixel `image` (exactly `rows` tall) as a standalone block at the left margin,
+// leaving the cursor at column 1 on the line just below it. Scroll-safe and needs no cursor report:
+// print `rows` newlines to reserve the band (this scrolls if we are near the screen bottom, making
+// room first), move the cursor back up `rows` lines (relative, so unaffected by any scroll), then
+// replay the sixel. timg's bytes paint at the current cursor and leave it at column 1 on the row
+// below the image; with the band sized to the image, that is the band bottom — ready for the next
+// block, just like a text paragraph's trailing newline.
+void emitImageParagraph(const std::string& image, int rows, std::ostream& out) {
+    out << std::string(static_cast<size_t>(rows), '\n');  // reserve the band (may scroll)
+    out << "\033[" << rows << 'A';                         // back to the band's top row, column 1
+    out << image;                                          // paint; cursor ends at the band bottom
 }
 
 // ---------------------------------------------------------------------------
@@ -739,10 +849,15 @@ void emitParagraph(const std::vector<std::string>& lines, std::ostream& out) {
         joined += trim(lines[i]);
     }
     // A paragraph that is just an <img> tag for a local PNG renders as an image instead of text.
+    // renderImageBlock returns either a multi-row sixel (ih > 1, or ih == 1 with sixel bytes) or a
+    // one-line text fallback (ih == 1, plain text — e.g. on a non-graphics terminal). The sixel is
+    // placed via the reserve-and-paint helper; the text fallback is emitted as a normal line.
     std::string image;
     int iw = 0, ih = 0;
     if (renderImageBlock(trim(joined), terminalWidth(), image, iw, ih)) {
-        if (!image.empty()) out << image << '\n';
+        if (image.empty()) return;
+        if (isSixelImage(image)) emitImageParagraph(image, ih, out);
+        else                     out << image << '\n';   // one-line text fallback
         return;
     }
     std::string reflowed = reflow(renderInline(joined), terminalWidth());
@@ -832,20 +947,29 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
     const int W = terminalWidth();
     int budget = W - 2 * static_cast<int>(ncols - 1);
     if (budget < static_cast<int>(ncols)) budget = static_cast<int>(ncols);  // at least 1 col each
+    // Cap each image at its equal share of the budget so it cannot overflow into the next column;
+    // column widths are decided below, but an image must be rendered before its column is sized.
+    const int imgCap = std::max(1, budget / static_cast<int>(ncols));
 
-    // Render every cell, distinguishing image cells (a lone <img> for a local PNG) from text cells.
-    // An image cell holds a multi-line sixel block whose bytes must never reach displayWidth/reflow,
-    // so we record its fixed column width separately and carry it through layout untouched.
+    // Render every cell, distinguishing image cells (a lone <img> for a local PNG that produced an
+    // actual sixel) from text cells. An image cell holds raw sixel bytes that must never reach
+    // displayWidth/reflow, so we record its column width and row height separately and carry the
+    // bytes through layout untouched. A non-image result (ordinary text, or an <img> fallback to its
+    // alt text/filename when graphics are unavailable) is treated as normal reflowable text.
     std::vector<std::vector<bool>> isImage(rows.size(), std::vector<bool>(ncols, false));
+    std::vector<std::vector<int>> imgRows(rows.size(), std::vector<int>(ncols, 0));  // image height
     std::vector<int> imgWidth(ncols, 0);   // forced width of an image column, if any
     for (size_t i = 0; i < rows.size(); ++i) {
         for (size_t j = 0; j < ncols; ++j) {
             std::string block;
             int iw = 0, ih = 0;
-            if (renderImageBlock(trim(rows[i][j]), budget, block, iw, ih) && ih > 0) {
+            if (renderImageBlock(trim(rows[i][j]), imgCap, block, iw, ih) && isSixelImage(block)) {
                 rows[i][j] = block;
                 isImage[i][j] = true;
+                imgRows[i][j] = std::max(1, ih);
                 imgWidth[j] = std::max(imgWidth[j], iw);
+            } else if (!block.empty() && ih == 1) {
+                rows[i][j] = block;          // <img> fallback text (alt/filename): reflow as text
             } else {
                 rows[i][j] = renderInline(rows[i][j]);
             }
@@ -891,36 +1015,57 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
     total += 2 * static_cast<int>(ncols - 1);  // two-space column separators
     std::string hline = horizontalLine(total);
 
-    // Render a single (possibly multi-line) table row: each cell is reflowed text, top-aligned,
-    // its lines padded to the column width and joined by two spaces. `bold` wraps each cell line
-    // in bold for the header. Cells shorter than the tallest cell are padded with blank lines.
-    // An image cell's lines are emitted verbatim and padded by its known image width, since their
-    // sixel bytes can't be measured by displayWidth; the image's final line paints across the rows
-    // its leading blank lines reserved.
+    // The 1-based starting column of each cell, accounting for the two-space separators. Used to
+    // position image sixels during the overlay pass.
+    std::vector<int> colOrigin(ncols, 1);
+    for (size_t j = 1; j < ncols; ++j) colOrigin[j] = colOrigin[j - 1] + widths[j - 1] + 2;
+
+    // Render one table row. The row occupies a band as tall as the tallest cell — text line count or
+    // image row height, whichever is greater. Text is laid out first, top-aligned, one line at a
+    // time across the band; image cells contribute blank padding of their column width during this
+    // pass (reserving their space). Then, in a second pass, each image's sixel is painted into its
+    // reserved column with relative cursor moves: up to the band top, across to the cell's column,
+    // replay (which leaves the cursor at column 1 just below the image), then back down to the band
+    // bottom. This keeps every image inside its own cell and keeps row separators below the band.
     auto emitRow = [&](size_t rowIdx, bool bold) {
         const std::vector<std::string>& cells = rows[rowIdx];
         std::vector<std::vector<std::string>> cellLines(ncols);
-        size_t height = 1;
+        int bandH = 1;
         for (size_t j = 0; j < ncols; ++j) {
-            cellLines[j] = splitOnNewlines(cells[j]);
-            height = std::max(height, cellLines[j].size());
+            if (isImage[rowIdx][j]) {
+                bandH = std::max(bandH, imgRows[rowIdx][j]);
+            } else {
+                cellLines[j] = splitOnNewlines(cells[j]);
+                bandH = std::max(bandH, static_cast<int>(cellLines[j].size()));
+            }
         }
-        for (size_t k = 0; k < height; ++k) {
+        // Text pass: bandH lines. Image cells reserve their column width with spaces.
+        for (int k = 0; k < bandH; ++k) {
             std::string line;
             for (size_t j = 0; j < ncols; ++j) {
                 if (j) line += "  ";
-                std::string piece = k < cellLines[j].size() ? cellLines[j][k] : std::string();
                 if (isImage[rowIdx][j]) {
-                    // Pad by the image's known column footprint; its bytes are opaque to displayWidth.
-                    int pad = widths[j] - (k + 1 == cellLines[j].size() ? imgWidth[j] : 0);
-                    line += piece;
-                    if (pad > 0) line.append(static_cast<size_t>(pad), ' ');
+                    line.append(static_cast<size_t>(widths[j]), ' ');
                 } else {
+                    std::string piece =
+                        static_cast<size_t>(k) < cellLines[j].size() ? cellLines[j][k] : std::string();
                     if (bold && !piece.empty()) piece = kBoldOn + piece + kBoldOff;
                     line += padTo(piece, widths[j]);
                 }
             }
             out << line << '\n';
+        }
+        // Overlay pass: paint each image into its reserved space. The cursor is at column 1 on the
+        // row just below the band; all moves are relative to that, so the band's earlier scroll
+        // (if any) does not matter.
+        for (size_t j = 0; j < ncols; ++j) {
+            if (!isImage[rowIdx][j]) continue;
+            int r = imgRows[rowIdx][j];
+            out << "\033[" << bandH << 'A';                  // up to the band top
+            out << "\033[" << colOrigin[j] << 'G';           // across to this cell's column
+            out << cells[j];                                 // paint; cursor ends below the image
+            if (bandH > r) out << "\033[" << (bandH - r) << 'B';  // back down to the band bottom
+            out << '\r';                                     // column 1 for the next overlay / row
         }
     };
 
