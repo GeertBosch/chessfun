@@ -1010,20 +1010,22 @@ std::vector<std::string> splitLines(std::istream& in) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::vector<std::string> lines;
     if (argc > 1) {
+        // Render each file independently and concatenate the results, rather than merging the files'
+        // lines into one document. This keeps the boundary between files clean: the last block of one
+        // file can never merge with the first block of the next. It also makes rendering distribute
+        // over the argument list — `mdcat a b` produces exactly `mdcat a` followed by `mdcat b` —
+        // which is checked by tests/property-concat.sh.
         for (int a = 1; a < argc; ++a) {
             std::ifstream f(argv[a]);
             if (!f) {
                 std::cerr << "mdcat: " << argv[a] << ": cannot open file\n";
                 return 1;
             }
-            auto fileLines = splitLines(f);
-            lines.insert(lines.end(), fileLines.begin(), fileLines.end());
+            render(splitLines(f), std::cout);
         }
     } else {
-        lines = splitLines(std::cin);
+        render(splitLines(std::cin), std::cout);
     }
-    render(lines, std::cout);
     return 0;
 }
