@@ -4,9 +4,11 @@
 // expressions, it parses the input in two phases that mirror the GFM specification
 // (https://github.github.com/gfm):
 //
-//   1. Block parsing splits the document into a sequence of leaf blocks: ATX headings,
-//      thematic breaks, fenced code blocks, GFM tables, and paragraphs. Blank lines separate
-//      blocks; the lines of a paragraph are gathered together so they can be reflowed.
+//   1. Block parsing splits the document into a sequence of blocks: ATX headings, thematic
+//      breaks, fenced code blocks, GFM tables, and paragraphs (the leaf blocks), plus block
+//      quotes (a container block whose stripped contents are rendered recursively and drawn with
+//      a left rule). Blank lines separate blocks; the lines of a paragraph are gathered together
+//      so they can be reflowed.
 //   2. Inline parsing turns the raw text of headings, paragraphs and table cells into styled
 //      runs: emphasis (*x* / _x_), strong emphasis (**x**), code spans (`x`) and links
 //      ([text](url)). Code-fence contents are emitted verbatim, not inline-parsed.
@@ -55,13 +57,21 @@ const std::string kCodeOn = "\033[48;5;253;38;5;236m";  // light-gray bg, dark-g
 const std::string kCodeOff = "\033[39;49m";
 const std::string kReset = "\033[0m";
 const std::string kLightGray = "\033[38;5;250m";
+const std::string kQuoteBar = "\033[38;5;244m▎\033[0m ";  // the left rule drawn before quoted lines
 
 // An explicit width from the --width/-w command-line flag, or <= 0 if none was given. Set by main()
 // before any rendering, and so before terminalWidth() is first called and caches its result.
 int gWidthOverride = 0;
 
-// The display width used for thematic breaks, header underlines and paragraph reflow.
-int terminalWidth() {
+// Columns currently consumed by container-block decorations (the block-quote left rule). Every
+// nested block quote raises it by the width of its prefix while its content is being rendered, so
+// the width that paragraphs reflow to and that tables and rules fill shrinks to match the space the
+// prefix leaves. Restored on the way out. See emitBlockQuote / terminalWidth.
+int gIndent = 0;
+
+// The full terminal width, before any container indentation is taken out. Determined once and cached
+// (see the comment in terminalWidth). Callers want terminalWidth(), which subtracts the indent.
+int fullTerminalWidth() {
     // Determined once and cached for the rest of the run: the width is fixed for our purposes and
     // there is no reason to repeat the syscall for every block and every reflowed line.
     //
@@ -85,6 +95,12 @@ int terminalWidth() {
         return 100;  // sensible default when not attached to a terminal
     }();
     return width;
+}
+
+// The width content should be laid out to: the terminal width less the columns taken by any
+// surrounding container-block decoration (gIndent). At least one column so layout never collapses.
+int terminalWidth() {
+    return std::max(1, fullTerminalWidth() - gIndent);
 }
 
 // Whether the terminal can display inline images (sixel graphics, which timg emits with -ps).
@@ -907,6 +923,35 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
 // Block parser / document driver
 // ---------------------------------------------------------------------------
 
+void render(const std::vector<std::string>& lines, std::ostream& out);
+
+// Drop a single trailing '\n' if present. render() terminates every block with one, so the buffered
+// output of a recursive render ends in a newline; removing it keeps splitOnNewlines from yielding a
+// spurious empty final line (which would draw an extra bare quote rule).
+std::string trimTrailingNewline(const std::string& s) {
+    if (!s.empty() && s.back() == '\n') return s.substr(0, s.size() - 1);
+    return s;
+}
+
+// True if `line` opens a block quote: up to three spaces of indentation, then a '>'. (GFM allows
+// the block-quote marker to be indented by at most three spaces; four would be a code indent, which
+// this renderer does not implement, but checking the bound keeps the detection honest.)
+bool isBlockQuote(const std::string& line) {
+    size_t i = 0;
+    while (i < line.size() && i < 3 && line[i] == ' ') ++i;
+    return i < line.size() && line[i] == '>';
+}
+
+// Strip one block-quote marker from a line that isBlockQuote(): drop up to three leading spaces,
+// the '>', and one optional space after it. The remainder is the line's content one level in.
+std::string stripBlockQuote(const std::string& line) {
+    size_t i = 0;
+    while (i < line.size() && i < 3 && line[i] == ' ') ++i;
+    if (i < line.size() && line[i] == '>') ++i;      // the marker itself
+    if (i < line.size() && line[i] == ' ') ++i;       // one optional space of padding
+    return line.substr(i);
+}
+
 // True if the trimmed line is a valid ATX heading marker (1-6 '#' then space or end of line).
 bool isAtxHeading(const std::string& t) {
     size_t h = 0;
@@ -939,10 +984,27 @@ bool startsBlock(const std::vector<std::string>& lines, size_t j) {
     if (isAtxHeading(t)) return true;
     if (isCodeFence(t)) return true;
     if (isThematicBreak(t)) return true;
+    if (isBlockQuote(lines[j])) return true;
     if (lines[j].find('|') != std::string::npos && j + 1 < lines.size() &&
         isTableDelimiterRow(lines[j + 1]))
         return true;  // a GFM table header row
     return false;
+}
+
+// Render the gathered lines of a block quote (markers already stripped) one container level deeper.
+// The contents are a full sequence of blocks, so they go through render() recursively; the rendered
+// output is then prefixed line by line with the quote rule. gIndent is raised by the rule's width
+// while the contents render, so paragraphs reflow and rules fill within the narrower inner column.
+void emitBlockQuote(const std::vector<std::string>& inner, std::ostream& out) {
+    const int prefixWidth = 2;  // displayWidth(kQuoteBar): the bar glyph plus one space
+    std::ostringstream buf;
+    gIndent += prefixWidth;
+    render(inner, buf);
+    gIndent -= prefixWidth;
+    // Prefix every line of the rendered contents with the quote rule. Blank separator lines between
+    // inner blocks get the bar too, so the rule is continuous down the whole quote.
+    for (const std::string& line : splitOnNewlines(trimTrailingNewline(buf.str())))
+        out << kQuoteBar << line << '\n';
 }
 
 void render(const std::vector<std::string>& lines, std::ostream& out) {
@@ -997,6 +1059,28 @@ void render(const std::vector<std::string>& lines, std::ostream& out) {
             separate();
             emitThematicBreak(out);
             ++i;
+            continue;
+        }
+
+        // Block quote: one or more lines starting with '>'. Gather the run, including lazy
+        // continuation lines — a non-blank line without its own '>' that continues a paragraph
+        // inside the quote (GFM 5.1). A blank line, or an unquoted line that itself starts a new
+        // block, ends the quote. The markers are stripped and the contents rendered recursively.
+        if (isBlockQuote(line)) {
+            separate();
+            std::vector<std::string> inner;
+            size_t j = i;
+            for (; j < n; ++j) {
+                if (isBlockQuote(lines[j])) {
+                    inner.push_back(stripBlockQuote(lines[j]));
+                } else if (!trim(lines[j]).empty() && !startsBlock(lines, j)) {
+                    inner.push_back(lines[j]);   // lazy paragraph continuation
+                } else {
+                    break;
+                }
+            }
+            emitBlockQuote(inner, out);
+            i = j;
             continue;
         }
 
