@@ -4,7 +4,10 @@ CXXFLAGS ?= -std=c++17 -O2 -Wall
 mdcat: mdcat.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
+check: mdcat
+	./tests/property-concat.sh
+
 clean:
 	rm -f mdcat
 
-.PHONY: clean
+.PHONY: check clean

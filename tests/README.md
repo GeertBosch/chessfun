@@ -16,6 +16,21 @@ Run them all:
 make && for f in tests/*.md; do printf '\n===== %s =====\n' "$f"; ./mdcat "$f"; done
 ```
 
+## Automated check
+
+One property is checked automatically by `property-concat.sh`, run via:
+
+```
+make check
+```
+
+It asserts that rendering distributes over the file-argument list — for any
+files, `mdcat f1 f2 ... fn` produces exactly the concatenation of `mdcat f1`,
+`mdcat f2`, ..., `mdcat fn`. This guards the file-boundary handling: the last
+block of one file must never merge with the first block of the next. It runs
+over every `*.md` in this directory and exits non-zero (printing a diff) on a
+mismatch.
+
 Several tests describe behavior at a specific terminal width. To check those
 deterministically regardless of your real window size, force a width with
 `$COLUMNS` while piping (so the kernel window size doesn't win):
