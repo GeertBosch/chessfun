@@ -152,7 +152,9 @@ struct CellMetrics {
     int cellW = 8, cellH = 16;  // integer px/cell fallback
 
     // ceil-divide pixels to the cell count the terminal will use, via the precise area ratio when
-    // known (px * cells / areaPx, rounded up) and the integer cell size otherwise.
+    // known (px * cells / areaPx, rounded up) and the integer cell size otherwise. Used for the
+    // FOOTPRINT: turning a painted sixel's pixel size into the columns/rows it actually occupies, so
+    // the layout matches reality (on a HiDPI terminal the real cell is large, e.g. 14x34).
     int pxToCols(int px) const {
         if (cols > 0 && areaW > 0) return std::max(1, (px * cols + areaW - 1) / areaW);
         return std::max(1, (px + cellW - 1) / cellW);
@@ -161,6 +163,26 @@ struct CellMetrics {
         if (rows > 0 && areaH > 0) return std::max(1, (px * rows + areaH - 1) / areaH);
         return std::max(1, (px + cellH - 1) / cellH);
     }
+
+    // The real cell height/width in pixels (from the area ratio when known, else the integer cell).
+    int realCellH() const { return rows > 0 && areaH > 0 ? std::max(1, areaH / rows) : cellH; }
+    int realCellW() const { return cols > 0 && areaW > 0 ? std::max(1, areaW / cols) : cellW; }
+
+    // A "nominal" cell used only to turn a REQUESTED pixel size into the -g geometry, clamping the
+    // cell height to kMaxNominalH (and the width proportionally, preserving the cell's aspect). On a
+    // standard-DPI terminal the real cell is already smaller than the cap, so nothing changes; on a
+    // HiDPI terminal where one cell spans many device pixels, this stops a requested height from
+    // mapping to too few rows (which would render a tiny image) — the image comes out a little
+    // smaller than asked but much sharper. The footprint still uses the real cell, so columns line up.
+    static constexpr int kMaxNominalH = 20;
+    int nominalCellH() const { return std::min(realCellH(), kMaxNominalH); }
+    int nominalCellW() const {
+        int ch = realCellH();
+        if (ch <= kMaxNominalH) return realCellW();
+        return std::max(1, realCellW() * kMaxNominalH / ch);  // scale width with the clamped height
+    }
+    int pxToColsNominal(int px) const { return std::max(1, (px + nominalCellW() - 1) / nominalCellW()); }
+    int pxToRowsNominal(int px) const { return std::max(1, (px + nominalCellH() - 1) / nominalCellH()); }
 };
 
 // Kept for the CSI 16 t cell-size query reply.
@@ -731,9 +753,11 @@ bool renderImageBlock(const std::string& text, int availWidth, std::string& out,
     //   - an explicit height with no explicit width -> height-bound ("x<rows>");
     //   - otherwise a full box ("<cols>x<rows>") from both target dimensions.
     // The exact footprint is then read back from the painted sixel, which reflects timg's fit.
+    // Geometry uses the NOMINAL cell (real cell, height capped) so a requested pixel size maps to a
+    // sensible cell box independent of display DPI; the footprint below uses the real cell.
     CellMetrics cell = cellMetrics();
-    int wCells = cell.pxToCols(tw);
-    int hCells = cell.pxToRows(th);
+    int wCells = cell.pxToColsNominal(tw);
+    int hCells = cell.pxToRowsNominal(th);
     std::string geom;
     if (availWidth > 0 && wCells > availWidth)
         geom = std::to_string(availWidth) + "x";          // width-bound: clamp to the column
@@ -764,17 +788,26 @@ bool renderImageBlock(const std::string& text, int availWidth, std::string& out,
 // (ESC P), which rendered inline text never does (it uses only ESC[ for SGR and ESC] for OSC 8).
 bool isSixelImage(const std::string& s) { return s.find("\033P") != std::string::npos; }
 
+// Replay a captured sixel at the cursor's current position, then leave the cursor exactly where it
+// started. We bracket the bytes with DECSC/DECRC (ESC 7 / ESC 8): save the position, paint, restore.
+// This is terminal-independent — where a sixel leaves the cursor differs between terminals (VSCode
+// advances to the row below the image; iTerm does not), but the saved position is restored either
+// way — so callers can move deterministically afterward without depending on that behaviour.
+void replaySixel(const std::string& image, std::ostream& out) {
+    out << "\0337" << image << "\0338";
+}
+
 // Emit a captured sixel `image` (exactly `rows` tall) as a standalone block at the left margin,
 // leaving the cursor at column 1 on the line just below it. Scroll-safe and needs no cursor report:
 // print `rows` newlines to reserve the band (this scrolls if we are near the screen bottom, making
-// room first), move the cursor back up `rows` lines (relative, so unaffected by any scroll), then
-// replay the sixel. timg's bytes paint at the current cursor and leave it at column 1 on the row
-// below the image; with the band sized to the image, that is the band bottom — ready for the next
-// block, just like a text paragraph's trailing newline.
+// room first), move the cursor back up `rows` lines (relative, so unaffected by any scroll), replay
+// the sixel (which restores the cursor to the band top), then step down `rows` to the band bottom —
+// ready for the next block, just like a text paragraph's trailing newline.
 void emitImageParagraph(const std::string& image, int rows, std::ostream& out) {
     out << std::string(static_cast<size_t>(rows), '\n');  // reserve the band (may scroll)
     out << "\033[" << rows << 'A';                         // back to the band's top row, column 1
-    out << image;                                          // paint; cursor ends at the band bottom
+    replaySixel(image, out);                               // paint; cursor restored to band top
+    out << "\033[" << rows << 'B' << '\r';                 // down to the band bottom, column 1
 }
 
 // ---------------------------------------------------------------------------
@@ -1096,12 +1129,18 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
 
     // Tighten each image column to the width its image actually paints (aspect-fit and rounding can
     // make it narrower than the allocated cap), so a column hugs its image and the gap between
-    // columns stays the intended two spaces rather than padding out to the cap.
+    // columns stays the intended two spaces rather than padding out to the cap. But never tighten
+    // below the column's widest TEXT cell (e.g. a header wider than the image): doing so would let
+    // that text overflow and push every later column's origin out of alignment.
     for (size_t j = 0; j < ncols; ++j) {
         if (imgWidth[j] <= 0) continue;
         int w = 0;
-        for (size_t i = 0; i < rows.size(); ++i)
-            if (isImage[i][j]) w = std::max(w, imgCellW[i][j]);
+        for (size_t i = 0; i < rows.size(); ++i) {
+            if (isImage[i][j])
+                w = std::max(w, imgCellW[i][j]);
+            else
+                for (auto& ln : splitOnNewlines(rows[i][j])) w = std::max(w, displayWidth(ln));
+        }
         if (w > 0) widths[j] = w;
     }
 
@@ -1150,17 +1189,17 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
             }
             out << line << '\n';
         }
-        // Overlay pass: paint each image into its reserved space. The cursor is at column 1 on the
-        // row just below the band; all moves are relative to that, so the band's earlier scroll
-        // (if any) does not matter.
+        // Overlay pass: paint each image into its reserved space. The cursor starts at column 1 on
+        // the row just below the band; every move is relative to that, so the band's earlier scroll
+        // (if any) does not matter. Each sixel is bracketed by DECSC/DECRC (in replaySixel), so it
+        // restores the cursor to the band-top position regardless of how the terminal advances after
+        // a sixel — then we step deterministically back to the band bottom for the next image.
         for (size_t j = 0; j < ncols; ++j) {
             if (!isImage[rowIdx][j]) continue;
-            int r = imgRows[rowIdx][j];
             out << "\033[" << bandH << 'A';                  // up to the band top
             out << "\033[" << colOrigin[j] << 'G';           // across to this cell's column
-            out << cells[j];                                 // paint; cursor ends below the image
-            if (bandH > r) out << "\033[" << (bandH - r) << 'B';  // back down to the band bottom
-            out << '\r';                                     // column 1 for the next overlay / row
+            replaySixel(cells[j], out);                      // paint; cursor restored to band top
+            out << "\033[" << bandH << 'B' << '\r';          // down to the band bottom, column 1
         }
     };
 
