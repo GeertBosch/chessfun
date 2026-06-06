@@ -5,10 +5,11 @@
 // (https://github.github.com/gfm):
 //
 //   1. Block parsing splits the document into a sequence of blocks: ATX headings, thematic
-//      breaks, fenced code blocks, GFM tables, and paragraphs (the leaf blocks), plus block
-//      quotes (a container block whose stripped contents are rendered recursively and drawn with
-//      a left rule). Blank lines separate blocks; the lines of a paragraph are gathered together
-//      so they can be reflowed.
+//      breaks, fenced code blocks, GFM tables, and paragraphs (the leaf blocks), plus the
+//      container blocks — block quotes and lists — whose stripped contents are rendered
+//      recursively (a quote gets a left rule; a list item gets a bullet/number marker and a
+//      hanging indent). Blank lines separate blocks; the lines of a paragraph are gathered
+//      together so they can be reflowed.
 //   2. Inline parsing turns the raw text of headings, paragraphs and table cells into styled
 //      runs: emphasis (*x* / _x_), strong emphasis (**x**), code spans (`x`) and links
 //      ([text](url)). Code-fence contents are emitted verbatim, not inline-parsed.
@@ -63,11 +64,24 @@ const std::string kQuoteBar = "\033[38;5;244m▎\033[0m ";  // the left rule dra
 // before any rendering, and so before terminalWidth() is first called and caches its result.
 int gWidthOverride = 0;
 
-// Columns currently consumed by container-block decorations (the block-quote left rule). Every
-// nested block quote raises it by the width of its prefix while its content is being rendered, so
-// the width that paragraphs reflow to and that tables and rules fill shrinks to match the space the
-// prefix leaves. Restored on the way out. See emitBlockQuote / terminalWidth.
+// Columns currently consumed by container-block decorations (the block-quote left rule, a list
+// item's marker indent). Every nested container raises it by the width of its prefix while its
+// content is being rendered, so the width that paragraphs reflow to and that tables and rules fill
+// shrinks to match the space the prefix leaves. Restored on the way out. See emitBlockQuote /
+// emitList / terminalWidth.
 int gIndent = 0;
+
+// Current bullet-list nesting depth, used to pick the bullet glyph (• ◦ ▪ by depth, like GitHub's
+// disc/circle/square). Raised while a bullet list's items render and restored after. Ordered lists
+// don't change it — their marker is the number, not a depth-varying glyph. See emitList.
+int gListDepth = 0;
+
+// Set just before rendering the content of a *tight* list item. A tight list draws no blank line
+// between its items, and likewise its item bodies should not put a blank line between the item's lead
+// paragraph and an immediately-following nested list (GFM renders a tight item's paragraph without
+// <p> spacing). render() reads this once at entry to suppress its own top-level block separators,
+// then clears it so blocks nested deeper (and recursive renders) separate normally. See emitList.
+bool gTightItem = false;
 
 // The full terminal width, before any container indentation is taken out. Determined once and cached
 // (see the comment in terminalWidth). Callers want terminalWidth(), which subtracts the indent.
@@ -952,6 +966,68 @@ std::string stripBlockQuote(const std::string& line) {
     return line.substr(i);
 }
 
+// A parsed list-item marker. `markerWidth` is the number of leading columns the marker plus its
+// trailing spaces occupy on the first line — i.e. the column the item's content begins at, which is
+// also the indent every continuation line and nested block must reach to stay in the item.
+struct ListMarker {
+    bool ordered = false;       // true for "1." / "1)", false for a "-"/"+"/"*" bullet
+    char delim = 0;             // bullet char ('-','+','*') or ordered delimiter ('.'/')')
+    int start = 0;              // ordered list's starting number (the digits before the delimiter)
+    size_t markerWidth = 0;     // columns from line start to the item's content (the content indent)
+};
+
+// If `line` begins a list item, fill `m` and return true. A marker is up to three spaces of indent,
+// then either a bullet (-, +, *) or an ordered marker (1-9 digits then '.' or ')'), then at least
+// one space (or end of line). The trailing run of spaces is folded into markerWidth so the content
+// indent is known. An empty item (marker then end of line) gets a content indent of marker + 1, the
+// conventional single space. (We don't implement GFM's 4-space-content rule for over-indented item
+// bodies; up to a normal run of spaces after the marker is consumed.)
+bool parseListMarker(const std::string& line, ListMarker& m) {
+    size_t i = 0;
+    while (i < line.size() && i < 3 && line[i] == ' ') ++i;
+    if (i >= line.size()) return false;
+    size_t markerStart = i;
+    if (line[i] == '-' || line[i] == '+' || line[i] == '*') {
+        m.ordered = false;
+        m.delim = line[i];
+        ++i;
+    } else if (std::isdigit(static_cast<unsigned char>(line[i]))) {
+        size_t d = i;
+        while (d < line.size() && std::isdigit(static_cast<unsigned char>(line[d]))) ++d;
+        if (d - i > 9 || d >= line.size() || (line[d] != '.' && line[d] != ')')) return false;
+        m.ordered = true;
+        m.start = std::atoi(line.substr(i, d - i).c_str());
+        m.delim = line[d];
+        i = d + 1;
+    } else {
+        return false;
+    }
+    // The marker must be followed by a space (or be the whole line, an empty item).
+    if (i < line.size() && line[i] != ' ') return false;
+    (void)markerStart;
+    size_t afterMarker = i;
+    while (i < line.size() && line[i] == ' ') ++i;
+    // An empty item, or one indented by many spaces, still uses a single space of content indent.
+    if (i >= line.size() || i - afterMarker == 0) m.markerWidth = afterMarker + 1;
+    else m.markerWidth = i;
+    return true;
+}
+
+// True if `line` begins a list item of any kind.
+bool isListItem(const std::string& line) {
+    ListMarker m;
+    return parseListMarker(line, m);
+}
+
+// Two list markers belong to the same list when they are the same type, and for bullets the same
+// bullet character, and for ordered lists the same delimiter ('.'/')'). A change of any of these (or
+// a blank line followed by a different type) starts a new list. (GFM also treats a change of bullet
+// character as a new list; we follow that.)
+bool sameListType(const ListMarker& a, const ListMarker& b) {
+    if (a.ordered != b.ordered) return false;
+    return a.delim == b.delim;
+}
+
 // True if the trimmed line is a valid ATX heading marker (1-6 '#' then space or end of line).
 bool isAtxHeading(const std::string& t) {
     size_t h = 0;
@@ -985,10 +1061,71 @@ bool startsBlock(const std::vector<std::string>& lines, size_t j) {
     if (isCodeFence(t)) return true;
     if (isThematicBreak(t)) return true;
     if (isBlockQuote(lines[j])) return true;
+    if (isListItem(lines[j])) return true;
     if (lines[j].find('|') != std::string::npos && j + 1 < lines.size() &&
         isTableDelimiterRow(lines[j + 1]))
         return true;  // a GFM table header row
     return false;
+}
+
+// Strip up to `n` leading spaces from `line` (fewer if the line has fewer). Used to remove a list
+// item's content indent from its continuation lines so the item's body renders at column zero.
+std::string stripIndent(const std::string& line, size_t n) {
+    size_t i = 0;
+    while (i < n && i < line.size() && line[i] == ' ') ++i;
+    return line.substr(i);
+}
+
+// Count the leading spaces of `line` (its indentation in columns; tabs are not expanded — the inputs
+// here use spaces, matching the rest of the parser).
+size_t leadingSpaces(const std::string& line) {
+    size_t i = 0;
+    while (i < line.size() && line[i] == ' ') ++i;
+    return i;
+}
+
+// One gathered list item: the content lines with the item's content indent already stripped, plus
+// whether a blank line appeared anywhere inside it (which, like a blank line between items, makes the
+// whole list loose — GFM 5.3).
+struct ListItem {
+    std::vector<std::string> lines;
+    bool hadBlank = false;
+};
+
+// Render a gathered list. Each item's content is a full block sequence rendered recursively (one
+// container level deeper) into a buffer; the buffer's first line is prefixed with the item marker and
+// the rest with equal-width padding so the body hangs under the marker. Bullets use a depth-varying
+// glyph (• ◦ ▪, matching GitHub's disc/circle/square); ordered items keep their number with a '.'.
+// gListDepth tracks bullet nesting for the glyph; gIndent is raised by the marker width so inner
+// content reflows within the narrower column. A loose list prints a blank line between items.
+void emitList(const std::vector<ListItem>& items, const ListMarker& marker, bool loose,
+              std::ostream& out) {
+    static const std::vector<std::string> kBullets = {"•", "◦", "▪"};
+    for (size_t idx = 0; idx < items.size(); ++idx) {
+        if (idx && loose) out << '\n';
+
+        // Build the marker text and the matching blank padding for continuation lines.
+        std::string mark;
+        if (marker.ordered) {
+            mark = std::to_string(marker.start + static_cast<int>(idx)) + marker.delim + ' ';
+        } else {
+            mark = kBullets[std::min<size_t>(gListDepth, kBullets.size() - 1)] + std::string(" ");
+        }
+        int markWidth = displayWidth(mark);
+        std::string pad(static_cast<size_t>(markWidth), ' ');
+
+        std::ostringstream buf;
+        gIndent += markWidth;
+        if (!marker.ordered) ++gListDepth;
+        if (!loose) gTightItem = true;  // suppress lead-paragraph/sublist spacing in a tight item
+        render(items[idx].lines, buf);
+        if (!marker.ordered) --gListDepth;
+        gIndent -= markWidth;
+
+        std::vector<std::string> body = splitOnNewlines(trimTrailingNewline(buf.str()));
+        for (size_t k = 0; k < body.size(); ++k)
+            out << (k == 0 ? mark : pad) << body[k] << '\n';
+    }
 }
 
 // Render the gathered lines of a block quote (markers already stripped) one container level deeper.
@@ -1010,9 +1147,14 @@ void emitBlockQuote(const std::vector<std::string>& inner, std::ostream& out) {
 void render(const std::vector<std::string>& lines, std::ostream& out) {
     size_t n = lines.size();
     bool emitted = false;  // has any block been printed yet?
+    // A tight list item suppresses the blank line between its own top-level blocks (its lead
+    // paragraph and a nested list). Snapshot the flag and clear it immediately, so this applies only
+    // to this render's top level — blocks rendered deeper, and recursive renders, separate normally.
+    bool tight = gTightItem;
+    gTightItem = false;
     // Print a blank line before every block except the first, so blocks are visually separated
-    // without a leading or trailing blank line in the output.
-    auto separate = [&] { if (emitted) out << '\n'; emitted = true; };
+    // without a leading or trailing blank line in the output. A tight item skips that blank.
+    auto separate = [&] { if (emitted && !tight) out << '\n'; emitted = true; };
     for (size_t i = 0; i < n;) {
         const std::string& line = lines[i];
         std::string t = trim(line);
@@ -1080,6 +1222,72 @@ void render(const std::vector<std::string>& lines, std::ostream& out) {
                 }
             }
             emitBlockQuote(inner, out);
+            i = j;
+            continue;
+        }
+
+        // List: a run of items sharing a marker type (GFM 5.3). Reached only after the thematic-break
+        // check above, so a line like "- - -" or "***" is a rule, not a one-item list. Each item is
+        // gathered as the content lines belonging to it (its content indent stripped); a line at the
+        // list's own indent that opens a same-type marker starts the next item; one that opens a
+        // different-type marker, a non-indented block start, or follows a blank line at a lower indent
+        // ends the list. The list is loose if any blank line falls between items or inside an item.
+        if (isListItem(line)) {
+            separate();
+            ListMarker listMarker;
+            parseListMarker(line, listMarker);  // defines the list's type for the whole run
+
+            std::vector<ListItem> items;
+            bool loose = false;
+            size_t j = i;
+            while (j < n) {
+                ListMarker m;
+                // A new item: a marker line at this list's indent level and matching type.
+                if (parseListMarker(lines[j], m) && leadingSpaces(lines[j]) < listMarker.markerWidth) {
+                    if (!sameListType(m, listMarker)) break;  // different marker type: a separate list
+                    ListItem item;
+                    // The first line keeps everything after the marker (drop the marker itself, not
+                    // just leading spaces — there are none before it at this point).
+                    item.lines.push_back(lines[j].substr(std::min(m.markerWidth, lines[j].size())));
+                    size_t k = j + 1;
+                    bool pendingBlank = false;  // a blank line seen but not yet committed to the item
+                    for (; k < n; ++k) {
+                        if (trim(lines[k]).empty()) { pendingBlank = true; continue; }
+                        size_t ind = leadingSpaces(lines[k]);
+                        if (ind >= m.markerWidth) {
+                            // Indented to (or past) the content column: part of this item's body. A
+                            // committed blank line before it is preserved and makes the list loose.
+                            if (pendingBlank) {
+                                item.hadBlank = true;
+                                item.lines.push_back("");
+                                pendingBlank = false;
+                            }
+                            item.lines.push_back(stripIndent(lines[k], m.markerWidth));
+                        } else if (!pendingBlank && !startsBlock(lines, k)) {
+                            // Lazy continuation: an unindented paragraph line directly following the
+                            // item's text (no blank between) still belongs to its paragraph.
+                            item.lines.push_back(lines[k]);
+                        } else {
+                            break;  // unindented block start, marker, or post-blank line: item ends.
+                        }
+                    }
+                    if (item.hadBlank) loose = true;
+                    // A blank line separating this item from a following same-type item at the list's
+                    // own indent makes the whole list loose (GFM 5.3).
+                    if (pendingBlank && k < n) {
+                        ListMarker next;
+                        if (parseListMarker(lines[k], next) &&
+                            leadingSpaces(lines[k]) < listMarker.markerWidth &&
+                            sameListType(next, listMarker))
+                            loose = true;
+                    }
+                    items.push_back(std::move(item));
+                    j = k;
+                } else {
+                    break;
+                }
+            }
+            emitList(items, listMarker, loose, out);
             i = j;
             continue;
         }

@@ -68,3 +68,4 @@ make && COLUMNS=40 ./mdcat tests/tables-wrap.md
 | `tables-inline-wrap.md` | Inline styling wrapping inside cells, with no spill to adjacent cells |
 | `images.md`          | `<img>` rendering and its text fallback |
 | `block-quotes.md`    | Block quotes: nesting, lazy continuation, inner blocks, left rule |
+| `lists.md`           | Bullet/ordered lists: nesting, tight vs loose, multi-block items |
