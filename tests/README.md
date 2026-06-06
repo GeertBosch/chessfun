@@ -62,6 +62,7 @@ make && COLUMNS=40 ./mdcat tests/tables-wrap.md
 | `inline.md`          | Emphasis, strong, code spans, links |
 | `paragraphs.md`      | Paragraph reflow to the terminal width |
 | `code-blocks.md`     | Fenced code blocks rendered verbatim |
+| `code-indented.md`   | Indented (4-space) code blocks; not interrupting a paragraph |
 | `thematic-breaks.md` | Horizontal rules |
 | `tables-basic.md`    | A small multi-column table that fits |
 | `tables-wrap.md`     | Multi-column tables that must wrap to fit the width |

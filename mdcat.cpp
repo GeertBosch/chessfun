@@ -5,8 +5,8 @@
 // (https://github.github.com/gfm):
 //
 //   1. Block parsing splits the document into a sequence of blocks: ATX headings, thematic
-//      breaks, fenced code blocks, GFM tables, and paragraphs (the leaf blocks), plus the
-//      container blocks — block quotes and lists — whose stripped contents are rendered
+//      breaks, fenced and indented code blocks, GFM tables, and paragraphs (the leaf blocks),
+//      plus the container blocks — block quotes and lists — whose stripped contents are rendered
 //      recursively (a quote gets a left rule; a list item gets a bullet/number marker and a
 //      hanging indent). Blank lines separate blocks; the lines of a paragraph are gathered
 //      together so they can be reflowed.
@@ -1043,6 +1043,34 @@ bool isCodeFence(const std::string& t) {
     return r >= 3;
 }
 
+// True if `line` is indented enough to be an indented code line: at least four leading columns of
+// indentation, counting a leading tab as reaching the four-column stop. A blank line does not count
+// (it is handled separately as a possible interior blank). See GFM 4.4.
+bool isIndentedCode(const std::string& line) {
+    int cols = 0;
+    for (char c : line) {
+        if (c == ' ') ++cols;
+        else if (c == '\t') cols += 4;
+        else break;
+        if (cols >= 4) return true;
+    }
+    return false;  // ran out of leading whitespace before reaching column four (or the line is blank)
+}
+
+// Remove the four-column indent that introduces an indented code block, leaving the rest verbatim. A
+// leading tab counts as four columns and is consumed whole; otherwise up to four leading spaces are
+// dropped. Content beyond the first four columns is preserved exactly.
+std::string stripCodeIndent(const std::string& line) {
+    size_t i = 0;
+    int cols = 0;
+    while (i < line.size() && cols < 4) {
+        if (line[i] == ' ') { ++cols; ++i; }
+        else if (line[i] == '\t') { cols += 4; ++i; }
+        else break;
+    }
+    return line.substr(i);
+}
+
 // True if the trimmed line is a thematic break: >= 3 of the same -, * or _ (spaces allowed).
 bool isThematicBreak(const std::string& t) {
     std::string compact;
@@ -1305,6 +1333,29 @@ void render(const std::vector<std::string>& lines, std::ostream& out) {
             }
             emitTable(rows, out);
             i = j;
+            continue;
+        }
+
+        // Indented code block: lines indented four or more columns, rendered verbatim (GFM 4.4).
+        // Reached only at a fresh block position — an indented line right after a paragraph line is
+        // gathered as that paragraph's lazy continuation instead, because isIndentedCode is
+        // deliberately NOT part of startsBlock(), so a code block cannot interrupt a paragraph.
+        // Interior blank lines are kept; trailing blank lines are dropped. The four-column indent is
+        // stripped from each line and the rest emitted exactly, reusing the fenced-code panel style.
+        if (isIndentedCode(line)) {
+            separate();
+            std::vector<std::string> body;
+            size_t j = i;
+            for (; j < n; ++j) {
+                if (trim(lines[j]).empty()) { body.push_back(std::string()); continue; }
+                if (!isIndentedCode(lines[j])) break;
+                body.push_back(stripCodeIndent(lines[j]));
+            }
+            while (!body.empty() && body.back().empty()) body.pop_back();  // drop trailing blanks
+            emitCodeBlock(body, out);
+            // Resume right after the lines that became code; any trailing blank lines we gathered but
+            // popped are left for the main loop, which treats blank lines as block separators.
+            i += body.size();
             continue;
         }
 
