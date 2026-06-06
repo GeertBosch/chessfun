@@ -18,7 +18,7 @@ make && for f in tests/*.md; do printf '\n===== %s =====\n' "$f"; ./mdcat "$f"; 
 
 ## Automated checks
 
-Two properties are checked automatically. Run both via:
+Three properties are checked automatically. Run them all via:
 
 ```
 make check
@@ -32,6 +32,10 @@ the last block of one file must never merge with the first block of the next.
 `property-width.sh` asserts that the two ways of forcing the render width agree:
 `mdcat --width N` and `COLUMNS=N mdcat` produce byte-identical output, checked at
 one non-standard width. This guards the width-precedence logic.
+
+`property-blank-lines.sh` asserts that the number of blank lines in the output is
+invariant over the render width: blank lines come from block structure, so
+wrapping must never add or drop one. Checked across a few widths.
 
 Both run over every `*.md` in this directory and exit non-zero (printing a diff) on a
 mismatch.
