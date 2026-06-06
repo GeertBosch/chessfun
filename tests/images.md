@@ -14,13 +14,14 @@ line shows the alt text, the second shows `missing.png` (no alt, so the
 filename), and the third shows the alt text again. Force this path with
 `TERM_PROGRAM=Apple_Terminal ./mdcat tests/images.md`.
 
-Note: `chess-piece.png` is not provided here — create one to see a real image,
-or just confirm the fallback text on a non-graphics terminal.
+A 64x64 `chess-piece.png` (a black chess knight) is provided alongside this file,
+so the real-image path works on a graphics-capable TTY; `missing.png` is left
+absent on purpose to exercise the filename fallback.
 
 ---
 
-<img src="chess-piece.png" alt="A red square (alt text)">
+<img src="chess-piece.png" alt="A black chess knight (alt text)">
 
 <img src="missing.png">
 
-<img src="chess-piece.png" alt="A red square (alt text)" width="64" height="64">
+<img src="chess-piece.png" alt="A black chess knight (alt text)" width="64" height="64">
