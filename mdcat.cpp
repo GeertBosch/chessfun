@@ -17,7 +17,9 @@
 // Only the elements the original script dealt with are implemented, made more solid and more
 // conformant. As an exception to the "no inline HTML" rule, a paragraph or table cell that
 // consists solely of an <img ...> tag pointing at a local PNG is rendered as an actual image by
-// shelling out to timg(1); see renderImageBlock. All other inline HTML is passed through literally.
+// shelling out to timg(1) on terminals that support sixel graphics; elsewhere (e.g. Apple's
+// Terminal.app) it falls back to the tag's alt text or filename. See renderImageBlock. All other
+// inline HTML is passed through literally.
 //
 // Build:  c++ -std=c++17 -O2 -o mdcat mdcat.cpp
 // Usage:  mdcat [file ...]   (reads standard input when given no file arguments)
@@ -74,6 +76,26 @@ int terminalWidth() {
         return 100;  // sensible default when not attached to a terminal
     }();
     return width;
+}
+
+// Whether the terminal can display inline images (sixel graphics, which timg emits with -ps).
+// Determined once and cached. Many terminals, including Apple's Terminal.app, cannot render sixel;
+// painting a sixel block there leaves garbage on screen, so on those terminals an <img> falls back
+// to its alt text or filename instead (see renderImageBlock).
+//
+// There is no portable capability query that works without round-tripping an escape to the terminal
+// and reading the reply, which is fragile. Instead we use $TERM_PROGRAM, which terminal emulators
+// set to identify themselves, to exclude the ones known not to support sixel; Apple_Terminal is the
+// motivating case. When output is not a terminal at all, there is likewise nothing to draw to.
+bool terminalSupportsGraphics() {
+    static const bool supported = [] {
+        if (!isatty(STDOUT_FILENO)) return false;
+        if (const char* prog = std::getenv("TERM_PROGRAM")) {
+            if (std::string(prog) == "Apple_Terminal") return false;
+        }
+        return true;
+    }();
+    return supported;
 }
 
 // ---------------------------------------------------------------------------
@@ -492,16 +514,27 @@ bool renderImageBlock(const std::string& text, int availWidth, std::string& out,
     std::map<std::string, std::string> attrs;
     if (!parseImgTag(text, attrs)) return false;
 
+    auto srcIt = attrs.find("src");
+
+    // Fall back to a one-line text block when an image can't (or shouldn't) be drawn: the alt text if
+    // present, else the source filename, else the literal tag. Used both for error cases and for
+    // terminals that cannot display graphics at all.
     auto fallback = [&](const std::string& reason) {
         (void)reason;
-        auto it = attrs.find("alt");
-        out = renderInline(it != attrs.end() && !it->second.empty() ? it->second : text);
+        auto altIt = attrs.find("alt");
+        std::string label;
+        if (altIt != attrs.end() && !altIt->second.empty()) label = altIt->second;
+        else if (srcIt != attrs.end() && !srcIt->second.empty()) label = srcIt->second;
+        else label = text;
+        out = renderInline(label);
         cellWidth = displayWidth(out);
         cellHeight = 1;
         return true;
     };
 
-    auto srcIt = attrs.find("src");
+    // On a terminal that can't render sixel graphics, show the alt text or filename instead.
+    if (!terminalSupportsGraphics()) return fallback("no graphics support");
+
     if (srcIt == attrs.end() || srcIt->second.empty()) return fallback("no src");
     const std::string& src = srcIt->second;
 
