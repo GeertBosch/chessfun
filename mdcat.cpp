@@ -139,8 +139,31 @@ bool terminalSupportsGraphics() {
     return supported;
 }
 
-// The pixel size of one character cell, used to convert an image's pixel footprint (read from the
-// sixel it produces) into a number of text rows/columns to reserve. Determined once and cached.
+// Metrics for converting an image's pixel footprint (read from the sixel it produces) into a number
+// of text rows/columns to reserve. A single cell is often a fractional number of pixels (e.g. ~5.83
+// px wide), so rounding it to an integer before dividing mis-counts: rounding up under-counts the
+// columns the terminal actually uses (image overflows its reserved space), rounding down over-counts
+// (leaves a gap). We therefore keep the text-area pixel size and cell count as a ratio and do the
+// pixel->cell conversion exactly, matching how the terminal lays a sixel out. `cellW`/`cellH` are an
+// integer fallback used only when the area ratio is unavailable.
+struct CellMetrics {
+    int areaW = 0, areaH = 0;   // text-area size in pixels (0 if unknown)
+    int cols = 0, rows = 0;     // text-area size in cells (0 if unknown)
+    int cellW = 8, cellH = 16;  // integer px/cell fallback
+
+    // ceil-divide pixels to the cell count the terminal will use, via the precise area ratio when
+    // known (px * cells / areaPx, rounded up) and the integer cell size otherwise.
+    int pxToCols(int px) const {
+        if (cols > 0 && areaW > 0) return std::max(1, (px * cols + areaW - 1) / areaW);
+        return std::max(1, (px + cellW - 1) / cellW);
+    }
+    int pxToRows(int px) const {
+        if (rows > 0 && areaH > 0) return std::max(1, (px * rows + areaH - 1) / areaH);
+        return std::max(1, (px + cellH - 1) / cellH);
+    }
+};
+
+// Kept for the CSI 16 t cell-size query reply.
 struct CellSize { int w; int h; };
 
 // Ask the terminal for its cell size with the CSI 16 t report: it replies "ESC [ 6 ; H ; W t".
@@ -179,24 +202,36 @@ CellSize queryCellSize16t() {
     return cs;
 }
 
-// Cell size in pixels, cached for the run. Preference order: the kernel's reported pixel size (no
-// round trip), then the CSI 16 t query, then a typical fallback. Only consulted when an image is
-// actually rendered, so non-image documents never pay for the query.
-CellSize cellPixelSize() {
-    static const CellSize cs = [] {
+// Cached cell metrics for the run. Preference order: the kernel's text-area pixels + cell counts
+// (TIOCGWINSZ ws_xpixel/ws_ypixel with ws_col/ws_row) — this gives the precise area ratio used for
+// exact pixel->cell conversion; then the CSI 16 t cell-size query as an integer fallback; then a
+// typical default. Only consulted when an image is actually rendered, so non-image documents never
+// pay for the query.
+CellMetrics cellMetrics() {
+    static const CellMetrics m = [] {
         for (int fd : {STDOUT_FILENO, STDERR_FILENO, STDIN_FILENO}) {
             struct winsize ws;
             if (ioctl(fd, TIOCGWINSZ, &ws) == 0 && ws.ws_xpixel > 0 && ws.ws_ypixel > 0 &&
                 ws.ws_col > 0 && ws.ws_row > 0) {
-                int w = ws.ws_xpixel / ws.ws_col, h = ws.ws_ypixel / ws.ws_row;
-                if (w > 0 && h > 0) return CellSize{w, h};
+                CellMetrics c;
+                c.areaW = ws.ws_xpixel;
+                c.areaH = ws.ws_ypixel;
+                c.cols = ws.ws_col;
+                c.rows = ws.ws_row;
+                c.cellW = std::max(1, ws.ws_xpixel / ws.ws_col);
+                c.cellH = std::max(1, ws.ws_ypixel / ws.ws_row);
+                return c;
             }
         }
         CellSize q = queryCellSize16t();
-        if (q.w > 0 && q.h > 0) return q;
-        return CellSize{8, 16};  // a typical ~1:2 cell when nothing reports one
+        CellMetrics c;
+        if (q.w > 0 && q.h > 0) { c.cellW = q.w; c.cellH = q.h; }  // area ratio stays unknown
+        return c;  // else the {8,16} struct defaults
     }();
-    return cs;
+    if (std::getenv("MDCAT_DEBUG_CELL"))
+        std::fprintf(stderr, "mdcat: cell metrics: area=%dx%d px, cells=%dx%d, cell~%dx%d px\n",
+                     m.areaW, m.areaH, m.cols, m.rows, m.cellW, m.cellH);
+    return m;
 }
 
 // ---------------------------------------------------------------------------
@@ -575,24 +610,29 @@ bool parseImgTag(const std::string& text, std::map<std::string, std::string>& at
     return false;  // ran off the end without a closing '>'
 }
 
-// Run timg to render `path` at W x H character cells with sixel graphics, returning its stdout.
-// Returns an empty string if timg cannot be launched or exits non-zero. The image data is captured
-// (rather than letting timg draw straight to the terminal) for two reasons: with its stdout on a
-// pipe timg emits plain sixel without doing its own cursor/scroll positioning, so we can later
-// replay the bytes at whatever cursor position we choose; and we can read the painted pixel size
-// out of the sixel to compute an exact cell footprint. timg still detects the real cell size via
-// /dev/tty, so `-g` is honoured in actual character cells.
-std::string runTimg(const std::string& path, int W, int H) {
+// Run timg to render `path` at the given -g geometry with sixel graphics, returning its stdout.
+// `geom` is a timg geometry string in character cells: "WxH" (a full box), "Wx" (width only, height
+// derived from the aspect ratio) or "xH" (height only, width derived). Partial geometry lets a
+// single requested dimension govern, with the other following the true aspect ratio, instead of our
+// own rounding double-constraining the box. Returns an empty string if timg cannot be launched or
+// exits non-zero.
+//
+// The image data is captured (rather than letting timg draw straight to the terminal) for two
+// reasons: with its stdout on a pipe timg emits plain sixel without doing its own cursor/scroll
+// positioning, so we can later replay the bytes at whatever cursor position we choose; and we can
+// read the painted pixel size out of the sixel to compute an exact cell footprint. timg still
+// detects the real cell size via /dev/tty, so `-g` is honoured in actual character cells.
+std::string runTimg(const std::string& path, const std::string& geom) {
     std::ostringstream cmd;
-    // -ps : sixel pixelation;  -g WxH : fit inside W x H character cells.  The path is passed via a
-    // single-quoted argument with embedded single quotes escaped, so odd filenames stay safe.
+    // -ps : sixel pixelation;  -g <geom> : fit inside the given character-cell box.  The path is
+    // passed single-quoted with embedded single quotes escaped, so odd filenames stay safe.
     std::string quoted = "'";
     for (char c : path) {
         if (c == '\'') quoted += "'\\''";
         else quoted += c;
     }
     quoted += "'";
-    cmd << "timg -ps -g" << W << "x" << H << " " << quoted << " 2>/dev/null";
+    cmd << "timg -ps -g" << geom << " " << quoted << " 2>/dev/null";
     FILE* p = popen(cmd.str().c_str(), "r");
     if (!p) return std::string();
     std::string out;
@@ -684,29 +724,37 @@ bool renderImageBlock(const std::string& text, int availWidth, std::string& out,
     else if (haveW)     { tw = aw; th = std::max(1, ph * aw / pw); }
     else if (haveH)     { th = ah; tw = std::max(1, pw * ah / ph); }
 
-    // Convert the target pixel size to a -g box in real character cells. timg detects the real cell
-    // size itself, so passing cells is correct; width is clamped to the available columns with the
-    // height scaled to match so the requested aspect ratio is preserved.
-    CellSize cell = cellPixelSize();
-    int W = std::max(1, (tw + cell.w - 1) / cell.w);
-    int H = std::max(1, (th + cell.h - 1) / cell.h);
-    if (availWidth > 0 && W > availWidth) {
-        H = std::max(1, H * availWidth / W);
-        W = availWidth;
-    }
+    // Convert the target pixel size to character cells (timg detects the real cell size itself, so a
+    // -g in cells is honoured). Then pick a SINGLE governing dimension so the other follows the true
+    // aspect ratio rather than our own rounding double-constraining the box:
+    //   - too wide for the available columns -> width-bound ("<availWidth>x");
+    //   - an explicit height with no explicit width -> height-bound ("x<rows>");
+    //   - otherwise a full box ("<cols>x<rows>") from both target dimensions.
+    // The exact footprint is then read back from the painted sixel, which reflects timg's fit.
+    CellMetrics cell = cellMetrics();
+    int wCells = cell.pxToCols(tw);
+    int hCells = cell.pxToRows(th);
+    std::string geom;
+    if (availWidth > 0 && wCells > availWidth)
+        geom = std::to_string(availWidth) + "x";          // width-bound: clamp to the column
+    else if (haveH && !haveW)
+        geom = "x" + std::to_string(hCells);              // height-bound: width follows aspect
+    else
+        geom = std::to_string(wCells) + "x" + std::to_string(hCells);
 
-    std::string img = runTimg(src, W, H);
+    std::string img = runTimg(src, geom);
     if (img.empty()) return fallback("timg failed");
 
-    // Exact footprint from the painted pixel size (aspect-fit may make the image smaller than the
-    // requested box). Fall back to the requested W x H if the sixel lacks raster attributes.
+    // Exact footprint from the painted pixel size (aspect-fit may differ from the requested box),
+    // converted with the precise area ratio so the reserved cells match what the terminal uses.
+    // Fall back to the requested cells if the sixel lacks raster attributes.
     int paintedW = 0, paintedH = 0;
     if (sixelPixelSize(img, paintedW, paintedH)) {
-        cellWidth = std::max(1, (paintedW + cell.w - 1) / cell.w);
-        cellHeight = std::max(1, (paintedH + cell.h - 1) / cell.h);
+        cellWidth = cell.pxToCols(paintedW);
+        cellHeight = cell.pxToRows(paintedH);
     } else {
-        cellWidth = W;
-        cellHeight = H;
+        cellWidth = wCells;
+        cellHeight = hCells;
     }
     out = img;
     return true;
