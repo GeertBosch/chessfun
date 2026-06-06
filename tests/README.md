@@ -68,5 +68,8 @@ make && COLUMNS=40 ./mdcat tests/tables-wrap.md
 | `tables-wrap.md`     | Multi-column tables that must wrap to fit the width |
 | `tables-inline-wrap.md` | Inline styling wrapping inside cells, with no spill to adjacent cells |
 | `images.md`          | `<img>` rendering and its text fallback |
+| `images-aspect.md`   | Tall/square/wide images in one table row; row sized to tallest |
+| `images-text-taller.md` | A text cell taller than its neighbor image; text drives row height |
+| `images-narrow-col.md`  | Images scaled down to narrow columns; standalone-image regressions |
 | `block-quotes.md`    | Block quotes: nesting, lazy continuation, inner blocks, left rule |
 | `lists.md`           | Bullet/ordered lists: nesting, tight vs loose, multi-block items |
