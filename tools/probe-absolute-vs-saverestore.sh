@@ -25,7 +25,7 @@ require_tty
 
 cursor_pos() {
     printf '%s6n' "$CSI"
-    rp=$(read_reply)
+    rp=$(read_reply R)
     echo "$rp" | sed -n 's/^ESC\[\([0-9]*\);\([0-9]*\)R.*/\1 \2/p'
 }
 

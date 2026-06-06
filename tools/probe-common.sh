@@ -28,17 +28,25 @@ emit_sixel() {
     fi
 }
 
-# Read a terminal reply to a query for up to ~0.5s.  Echoes the raw bytes
-# (with ESC shown as the literal text "ESC") so they are safe to print.
-# Usage: send a query to the terminal, then: reply=$(read_reply)
+# Read a terminal reply to a query.  Echoes the raw bytes (with ESC shown as the
+# literal text "ESC") so they are safe to print.  Stops as soon as it sees the
+# reply's terminating byte ($1, e.g. "t" for CSI..t reports or "R" for a cursor
+# report) so a slow reply is never misattributed to the next query.  Falls back
+# to an idle timeout if no terminator is given or none arrives.
+# Usage: send a query to the terminal, then: reply=$(read_reply t)
 read_reply() {
+    _term="$1"
     _r=""
-    # -s no echo, -t timeout, read one byte at a time until it stalls.
-    while IFS= read -r -s -t 1 -n 1 _c 2>/dev/null; do
+    # Read one byte at a time.  The first byte waits up to 2s for a slow reply;
+    # subsequent bytes use a short timeout so we don't hang if it never ends.
+    _to=2
+    while IFS= read -r -s -t "$_to" -n 1 _c 2>/dev/null; do
+        _to=1
         case "$_c" in
             "$ESC") _r="${_r}ESC" ;;
-            "") _r="${_r}" ;;
-            *) _r="${_r}${_c}" ;;
+            "") ;;
+            *) _r="${_r}${_c}"
+               [ -n "$_term" ] && [ "$_c" = "$_term" ] && break ;;
         esac
     done
     printf '%s' "$_r"

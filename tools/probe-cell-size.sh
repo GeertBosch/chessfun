@@ -21,9 +21,9 @@ dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 . "$dir/probe-common.sh"
 require_tty
 
-query() {  # $1 = the CSI argument, e.g. "16 t" -> sends ESC[16t
+query() {  # $1 = the CSI argument, e.g. "16t" -> sends ESC[16t and reads to 't'
     printf '%s%s' "$CSI" "$1"
-    read_reply
+    read_reply t
 }
 
 banner "Method A: direct queries (raw replies, ESC shown literally)"
