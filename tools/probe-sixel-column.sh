@@ -29,16 +29,18 @@ cursor_pos() {
     echo "$rp" | sed -n 's/^ESC\[\([0-9]*\);\([0-9]*\)R.*/\1 \2/p'
 }
 
-col_test() {  # $1 = column
-    c="$1"
-    banner "column $c test"
-    # Reserve 4 rows so the image has room and the next test isn't overwritten.
-    printf '\n\n\n\n'; printf '%s4A' "$CSI"
+col_test() {  # $1 = column, $2 = image box size in cells (WxH)
+    c="$1"; box="${2:-10x8}"
+    rows=${box#*x}
+    banner "column $c test (image box ${box} cells)"
+    # Reserve rows+1 so the image has room and the next test isn't overwritten.
+    i=0; while [ "$i" -le "$rows" ]; do printf '\n'; i=$((i + 1)); done
+    printf '%s%dA' "$CSI" "$((rows + 1))"
     printf '%s%dG' "$CSI" "$c"      # cursor to column c
     printf '@'                       # visible marker AT column c
     printf '%s%dG' "$CSI" "$c"      # back to column c (printing '@' advanced it)
-    emit_sixel "$PROBE_PNG" 4 3      # small image, no cursor move before it
-    printf '%s4B\r' "$CSI"           # drop below the reserved block
+    emit_sixel "$PROBE_PNG" "${box%x*}" "$rows"  # no cursor move before sixel
+    printf '%s%dB\r' "$CSI" "$((rows + 1))"      # drop below the reserved block
     printf '(image left edge: AT the @ = column honored; FAR LEFT = ignored)\n'
 }
 
@@ -47,7 +49,7 @@ pos=$(cursor_pos)
 printf 'captured cursor pos (row col) = [%s]\n' "$pos"
 printf '(if empty, reads fail in $(...) here; if numbers, reads work)\n'
 
-col_test 20
-col_test 40
+col_test 20 16x12
+col_test 40 16x12
 
 printf '\nDone.  Compare each image left edge to its @ marker.\n'
