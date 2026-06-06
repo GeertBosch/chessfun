@@ -371,7 +371,7 @@ private:
                     out += t.text;
                     break;
                 case Kind::Code:
-                    out += kCodeOn + ' ' + t.text + ' ' + kCodeOff;
+                    out += kCodeOn + t.text + kCodeOff;
                     break;
                 case Kind::Link:
                     out += "\033]8;;" + t.url + "\033\\" + t.text + "\033]8;;\033\\";
@@ -616,6 +616,32 @@ size_t unitLength(const std::string& s, size_t i) {
     return static_cast<size_t>(utf8SequenceLength(static_cast<unsigned char>(c)));
 }
 
+// Keep ANSI styling from bleeding across the line breaks that reflow (or table layout) introduces.
+// A code span carries a background colour (kCodeOn .. kCodeOff); if a span wraps, the line would end
+// with the background still on and paint gray to the right edge of the terminal. Walk the text line
+// by line, tracking whether a code span is open at each '\n': close it before the break and reopen
+// it after, so each line is self-contained and no background extends past its text.
+std::string closeStylesAtLineBreaks(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    bool inCode = false;
+    for (size_t i = 0; i < s.size();) {
+        if (s[i] == '\n') {
+            if (inCode) out += kCodeOff;      // close the span at end of line
+            out += '\n';
+            if (inCode) out += kCodeOn;        // reopen it at the start of the next line
+            ++i;
+            continue;
+        }
+        size_t len = unitLength(s, i);
+        if (s.compare(i, kCodeOn.size(), kCodeOn) == 0) inCode = true;
+        else if (s.compare(i, kCodeOff.size(), kCodeOff) == 0) inCode = false;
+        out.append(s, i, len);
+        i += len;
+    }
+    return out;
+}
+
 // Reflow a rendered (ANSI-styled) string so that no output line exceeds `width` display columns,
 // breaking on spaces between words. A word longer than `width` on its own is hard-cut at exactly
 // `width` columns and continued on the next line. ANSI escapes don't count toward the width and
@@ -671,7 +697,7 @@ std::string reflow(const std::string& s, int width) {
         lineWidth += ww;
         lineEmpty = false;
     }
-    return out;
+    return closeStylesAtLineBreaks(out);
 }
 
 void emitParagraph(const std::vector<std::string>& lines, std::ostream& out) {
