@@ -947,9 +947,6 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
     const int W = terminalWidth();
     int budget = W - 2 * static_cast<int>(ncols - 1);
     if (budget < static_cast<int>(ncols)) budget = static_cast<int>(ncols);  // at least 1 col each
-    // Cap each image at its equal share of the budget so it cannot overflow into the next column;
-    // column widths are decided below, but an image must be rendered before its column is sized.
-    const int imgCap = std::max(1, budget / static_cast<int>(ncols));
 
     // Render every cell, distinguishing image cells (a lone <img> for a local PNG that produced an
     // actual sixel) from text cells. An image cell holds raw sixel bytes that must never reach
@@ -958,15 +955,22 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
     // alt text/filename when graphics are unavailable) is treated as normal reflowable text.
     std::vector<std::vector<bool>> isImage(rows.size(), std::vector<bool>(ncols, false));
     std::vector<std::vector<int>> imgRows(rows.size(), std::vector<int>(ncols, 0));  // image height
+    std::vector<std::vector<int>> imgCellW(rows.size(), std::vector<int>(ncols, 0)); // image width
+    std::vector<std::vector<std::string>> imgText(rows.size(), std::vector<std::string>(ncols));
     std::vector<int> imgWidth(ncols, 0);   // forced width of an image column, if any
     for (size_t i = 0; i < rows.size(); ++i) {
         for (size_t j = 0; j < ncols; ++j) {
             std::string block;
             int iw = 0, ih = 0;
-            if (renderImageBlock(trim(rows[i][j]), imgCap, block, iw, ih) && isSixelImage(block)) {
+            // Render at the full content budget so an explicit height is honoured at the image's
+            // natural width; a column too narrow to hold it is handled by a re-render after layout.
+            std::string cellText = trim(rows[i][j]);
+            if (renderImageBlock(cellText, budget, block, iw, ih) && isSixelImage(block)) {
                 rows[i][j] = block;
                 isImage[i][j] = true;
                 imgRows[i][j] = std::max(1, ih);
+                imgCellW[i][j] = iw;
+                imgText[i][j] = cellText;     // kept so we can re-render at a clamped width
                 imgWidth[j] = std::max(imgWidth[j], iw);
             } else if (!block.empty() && ih == 1) {
                 rows[i][j] = block;          // <img> fallback text (alt/filename): reflow as text
@@ -1008,6 +1012,22 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
         widths[j] = actual;
         remaining -= actual;
         --remCols;
+    }
+
+    // An image whose column ended up narrower than its natural width (the table could not give it the
+    // room its requested height implied) is re-rendered to fit that width, so it never overflows into
+    // the next column. This is the only case that runs timg twice, and only when columns are tight.
+    for (size_t i = 0; i < rows.size(); ++i) {
+        for (size_t j = 0; j < ncols; ++j) {
+            if (!isImage[i][j] || widths[j] >= imgCellW[i][j]) continue;
+            std::string block;
+            int iw = 0, ih = 0;
+            if (renderImageBlock(imgText[i][j], widths[j], block, iw, ih) && isSixelImage(block)) {
+                rows[i][j] = block;
+                imgRows[i][j] = std::max(1, ih);
+                imgCellW[i][j] = iw;
+            }
+        }
     }
 
     int total = 0;
