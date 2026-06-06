@@ -25,8 +25,7 @@ require_tty
 
 # Ask for the cursor position: CSI 6 n -> reply "ESC[row;colR".  Echo "row col".
 cursor_pos() {
-    printf '%s6n' "$CSI"
-    rp=$(read_reply R)
+    rp=$(term_query '6n' R)
     echo "$rp" | sed -n 's/^ESC\[\([0-9]*\);\([0-9]*\)R.*/\1 \2/p'
 }
 

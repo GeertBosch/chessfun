@@ -22,8 +22,7 @@ dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 require_tty
 
 query() {  # $1 = the CSI argument, e.g. "16t" -> sends ESC[16t and reads to 't'
-    printf '%s%s' "$CSI" "$1"
-    read_reply t
+    term_query "$1" t
 }
 
 banner "Method A: direct queries (raw replies, ESC shown literally)"

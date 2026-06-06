@@ -23,8 +23,7 @@ require_tty
 : "${PROBE_STRATEGY:=abs}"
 
 cursor_pos() {
-    printf '%s6n' "$CSI"
-    rp=$(read_reply R)
+    rp=$(term_query '6n' R)
     echo "$rp" | sed -n 's/^ESC\[\([0-9]*\);\([0-9]*\)R.*/\1 \2/p'
 }
 

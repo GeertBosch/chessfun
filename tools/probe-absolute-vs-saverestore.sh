@@ -24,8 +24,7 @@ dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 require_tty
 
 cursor_pos() {
-    printf '%s6n' "$CSI"
-    rp=$(read_reply R)
+    rp=$(term_query '6n' R)
     echo "$rp" | sed -n 's/^ESC\[\([0-9]*\);\([0-9]*\)R.*/\1 \2/p'
 }
 
@@ -65,7 +64,11 @@ reserve_rows "$IMG_ROWS"
 emit_sixel "$PROBE_PNG" 8 "$IMG_ROWS"
 if [ -n "$startrow" ]; then
     printf '%s%d;1H' "$CSI" "$((startrow + IMG_ROWS))"
+    printf 'RESUMED-c (abs OK, startrow=%s; should be just below image c)\n' "$startrow"
+else
+    # No CPR reply: fall back to a relative move so the probe still completes.
+    printf '%s%dB' "$CSI" "$IMG_ROWS"
+    printf 'RESUMED-c (no CPR reply; used relative move instead)\n'
 fi
-printf 'RESUMED-c (should be just below image c)\n'
 
 printf '\nDone.  Screenshot all three blocks; the correctly-placed RESUMED wins.\n'

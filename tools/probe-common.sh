@@ -28,19 +28,22 @@ emit_sixel() {
     fi
 }
 
-# Read a terminal reply to a query.  Echoes the raw bytes (with ESC shown as the
-# literal text "ESC") so they are safe to print.  Stops as soon as it sees the
-# reply's terminating byte ($1, e.g. "t" for CSI..t reports or "R" for a cursor
-# report) so a slow reply is never misattributed to the next query.  Falls back
-# to an idle timeout if no terminator is given or none arrives.
-# Usage: send a query to the terminal, then: reply=$(read_reply t)
-read_reply() {
-    _term="$1"
-    _r=""
-    # Read one byte at a time.  The first byte waits up to 2s for a slow reply;
-    # subsequent bytes use a short timeout so we don't hang if it never ends.
+# Send a query to the terminal and read its reply.  CRITICAL: the query is
+# written to /dev/tty and the reply read from /dev/tty, NOT stdout/stdin — so
+# this works correctly inside command substitution `x=$(term_query ...)`, where
+# stdout is captured and a query printed to stdout would never reach the
+# terminal.  Returns the reply with ESC shown as the literal text "ESC".
+#
+# $1 = the bytes to send after CSI (e.g. "6n" -> sends ESC[6n)
+# $2 = the reply's terminating byte (e.g. "R" or "t"); reading stops once seen,
+#      so a slow reply is never misattributed to a later query.
+term_query() {
+    _q="$1"; _term="$2"; _r=""
+    printf '%s%s' "$CSI" "$_q" > /dev/tty
+    # First byte waits up to 2s for a slow reply; later bytes use a short
+    # timeout so we never hang if the terminator never arrives.
     _to=2
-    while IFS= read -r -s -t "$_to" -n 1 _c 2>/dev/null; do
+    while IFS= read -r -s -t "$_to" -n 1 _c < /dev/tty 2>/dev/null; do
         _to=1
         case "$_c" in
             "$ESC") _r="${_r}ESC" ;;
