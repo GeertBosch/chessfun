@@ -168,21 +168,16 @@ struct CellMetrics {
     int realCellH() const { return rows > 0 && areaH > 0 ? std::max(1, areaH / rows) : cellH; }
     int realCellW() const { return cols > 0 && areaW > 0 ? std::max(1, areaW / cols) : cellW; }
 
-    // A "nominal" cell used only to turn a REQUESTED pixel size into the -g geometry, clamping the
-    // cell height to kMaxNominalH (and the width proportionally, preserving the cell's aspect). On a
-    // standard-DPI terminal the real cell is already smaller than the cap, so nothing changes; on a
-    // HiDPI terminal where one cell spans many device pixels, this stops a requested height from
-    // mapping to too few rows (which would render a tiny image) — the image comes out a little
-    // smaller than asked but much sharper. The footprint still uses the real cell, so columns line up.
-    static constexpr int kMaxNominalH = 20;
-    int nominalCellH() const { return std::min(realCellH(), kMaxNominalH); }
-    int nominalCellW() const {
-        int ch = realCellH();
-        if (ch <= kMaxNominalH) return realCellW();
-        return std::max(1, realCellW() * kMaxNominalH / ch);  // scale width with the clamped height
-    }
-    int pxToColsNominal(int px) const { return std::max(1, (px + nominalCellW() - 1) / nominalCellW()); }
-    int pxToRowsNominal(int px) const { return std::max(1, (px + nominalCellH() - 1) / nominalCellH()); }
+    // A FIXED "nominal" cell used only to turn a REQUESTED (or intrinsic) pixel size into the -g
+    // geometry, the same on every terminal. Using a fixed ratio (rather than the real cell) makes a
+    // given width/height render at the same size everywhere: on a HiDPI terminal where one cell spans
+    // many device pixels, the real cell would map a requested height to too few rows (a tiny image),
+    // and on a low-DPI terminal it would render larger than on HiDPI — both undesirable. 8x20 keeps
+    // images compact and sharp. The FOOTPRINT still uses the real cell, so columns line up exactly.
+    static constexpr int kNominalW = 8;
+    static constexpr int kNominalH = 20;
+    int pxToColsNominal(int px) const { return std::max(1, (px + kNominalW - 1) / kNominalW); }
+    int pxToRowsNominal(int px) const { return std::max(1, (px + kNominalH - 1) / kNominalH); }
 };
 
 // Kept for the CSI 16 t cell-size query reply.
