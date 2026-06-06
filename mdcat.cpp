@@ -1035,31 +1035,47 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
         for (size_t j = 0; j < ncols; ++j)
             natural[j] = std::max(natural[j], isImage[i][j] ? imgWidth[j] : displayWidth(rows[i][j]));
 
-    // Allocate column widths left to right. The content budget excludes the two-space separators
-    // between columns. A text column may take up to its fair share of the remaining budget (rounded
-    // up, so earlier columns can be one wider), but never more than it needs; after reflowing to
-    // that cap its actual width may be smaller still, and the slack rolls forward. An image column
-    // is fixed at its image width and never reflowed.
+    // Decide a target width per column with max-min fair sharing of the content budget (which already
+    // excludes the two-space separators). A column whose natural width is at most its fair share keeps
+    // that natural width; the columns that want more split the leftover budget evenly. We iterate
+    // because fixing the columns that fit raises the share available to the rest — so e.g. one narrow
+    // column does not let the wide ones starve each other (the earlier left-to-right greedy did).
+    std::vector<int> target(ncols, 0);
+    std::vector<bool> fixed(ncols, false);
+    int remBudget = budget, remCols = static_cast<int>(ncols);
+    for (bool changed = true; changed && remCols > 0;) {
+        changed = false;
+        int fair = remBudget / remCols;
+        for (size_t j = 0; j < ncols; ++j) {
+            if (fixed[j] || natural[j] > fair) continue;
+            target[j] = natural[j];                 // fits within its share: keep natural width
+            fixed[j] = true;
+            remBudget -= natural[j];
+            --remCols;
+            changed = true;
+        }
+    }
+    if (remCols > 0) {                               // over-share columns split the rest evenly
+        int base = remBudget / remCols, extra = remBudget % remCols, k = 0;
+        for (size_t j = 0; j < ncols; ++j)
+            if (!fixed[j]) target[j] = base + (k++ < extra ? 1 : 0);  // remainder to earliest
+    }
+
+    // Apply the targets. A text column is reflowed to its target and may end narrower still; an image
+    // column takes the smaller of its natural width and the target (it does not wrap), and is
+    // re-rendered below if that is narrower than the image it already produced.
     std::vector<int> widths(ncols, 0);
-    int remaining = budget, remCols = static_cast<int>(ncols);
     for (size_t j = 0; j < ncols; ++j) {
-        bool imageCol = imgWidth[j] > 0;
-        int actual;
-        if (imageCol) {
-            actual = std::min(natural[j], remaining);   // images don't wrap; clamp to what's left
+        if (imgWidth[j] > 0) {
+            widths[j] = std::min(natural[j], target[j]);
         } else {
-            int fair = (remaining + remCols - 1) / remCols;   // ceil(remaining / remCols)
-            int cap = std::min(natural[j], fair);
-            actual = 0;
+            int actual = 0;
             for (auto& r : rows) {
-                r[j] = reflow(r[j], cap);
+                r[j] = reflow(r[j], target[j]);
                 for (auto& ln : splitOnNewlines(r[j])) actual = std::max(actual, displayWidth(ln));
             }
-            if (actual < 1) actual = (natural[j] == 0 ? 0 : 1);
+            widths[j] = actual < 1 ? (natural[j] == 0 ? 0 : 1) : actual;
         }
-        widths[j] = actual;
-        remaining -= actual;
-        --remCols;
     }
 
     // An image whose column ended up narrower than its natural width (the table could not give it the
@@ -1076,6 +1092,17 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
                 imgCellW[i][j] = iw;
             }
         }
+    }
+
+    // Tighten each image column to the width its image actually paints (aspect-fit and rounding can
+    // make it narrower than the allocated cap), so a column hugs its image and the gap between
+    // columns stays the intended two spaces rather than padding out to the cap.
+    for (size_t j = 0; j < ncols; ++j) {
+        if (imgWidth[j] <= 0) continue;
+        int w = 0;
+        for (size_t i = 0; i < rows.size(); ++i)
+            if (isImage[i][j]) w = std::max(w, imgCellW[i][j]);
+        if (w > 0) widths[j] = w;
     }
 
     int total = 0;
