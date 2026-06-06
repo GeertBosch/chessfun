@@ -18,14 +18,33 @@ DCS_ST="${ESC}\\"          # String Terminator (ESC \)
 : "${PROBE_PNG:=tests/chess-piece.png}"   # 64x64 grayscale knight
 
 # Emit a sixel for $1 scaled to fit $2 x $3 character cells (timg -g WxH).
-# With no W/H, timg uses its default fit.  Output goes straight to the terminal.
+# With no W/H, timg uses its default fit.
+#
+# CRITICAL: this CAPTURES timg's output to a file and then replays the bytes,
+# exactly as mdcat does (runTimg uses popen to a pipe).  When timg's stdout is
+# NOT a tty it emits plain sixel and does NOT do its own interactive cursor /
+# scrolling management; replaying the captured bytes then paints the image at
+# wherever the cursor currently sits.  Running timg straight to the tty instead
+# lets timg reposition the image itself (it ignores our cursor) — which is wrong
+# for placing images in a grid.  Note: with no tty, timg uses its DEFAULT cell
+# size for -g, so the painted pixel size is read from the sixel raster
+# attributes ("...;Ph;Pv) rather than assumed (see sixel_pixels).
 emit_sixel() {
     _png="$1"; _w="$2"; _h="$3"
+    _tmp=$(mktemp 2>/dev/null || echo /tmp/probe-sixel.$$)
     if [ -n "$_w" ] && [ -n "$_h" ]; then
-        timg -ps -g"${_w}x${_h}" "$_png"
+        timg -ps -g"${_w}x${_h}" "$_png" > "$_tmp" 2>/dev/null
     else
-        timg -ps "$_png"
+        timg -ps "$_png" > "$_tmp" 2>/dev/null
     fi
+    cat "$_tmp"
+    rm -f "$_tmp"
+}
+
+# Echo "Ph Pv" — the painted pixel width and height parsed from a captured sixel
+# file's raster attributes ("Pan;Pad;Ph;Pv).  Empty if not found.
+sixel_pixels() {  # $1 = file containing sixel
+    LC_ALL=C sed -n 's/.*"[0-9]*;[0-9]*;\([0-9]*\);\([0-9]*\).*/\1 \2/p' "$1" | head -1
 }
 
 # Send a query to the terminal and read its reply.  CRITICAL: the query is
