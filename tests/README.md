@@ -48,4 +48,5 @@ make && COLUMNS=40 ./mdcat tests/tables-wrap.md | cat
 | `thematic-breaks.md` | Horizontal rules |
 | `tables-basic.md`    | A small multi-column table that fits |
 | `tables-wrap.md`     | Multi-column tables that must wrap to fit the width |
+| `tables-inline-wrap.md` | Inline styling wrapping inside cells, with no spill to adjacent cells |
 | `images.md`          | `<img>` rendering and its text fallback |
