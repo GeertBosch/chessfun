@@ -22,7 +22,8 @@
 // inline HTML is passed through literally.
 //
 // Build:  c++ -std=c++17 -O2 -o mdcat mdcat.cpp
-// Usage:  mdcat [file ...]   (reads standard input when given no file arguments)
+// Usage:  mdcat [--width N] [--] [file ...]   (reads standard input when given no file arguments)
+//         --width N forces the render width, overriding $COLUMNS and the terminal size.
 
 #include <algorithm>
 #include <cctype>
@@ -55,23 +56,31 @@ const std::string kCodeOff = "\033[39;49m";
 const std::string kReset = "\033[0m";
 const std::string kLightGray = "\033[38;5;250m";
 
+// An explicit width from the --width/-w command-line flag, or <= 0 if none was given. Set by main()
+// before any rendering, and so before terminalWidth() is first called and caches its result.
+int gWidthOverride = 0;
+
 // The display width used for thematic breaks, header underlines and paragraph reflow.
 int terminalWidth() {
     // Determined once and cached for the rest of the run: the width is fixed for our purposes and
     // there is no reason to repeat the syscall for every block and every reflowed line.
     //
-    // Ask the terminal directly. $COLUMNS is a shell-internal variable that is usually not
-    // exported to child processes, so it is unreliable here; the window size from the kernel is
-    // authoritative when any of our standard streams is a terminal. Fall back to $COLUMNS (in
-    // case output is piped but the caller exported a width) and finally to a fixed default.
+    // Precedence, most explicit first:
+    //   1. --width / -w on the command line (gWidthOverride): an unconditional override.
+    //   2. $COLUMNS, when set to a positive value: lets the caller force a width even when a terminal
+    //      is attached (e.g. `COLUMNS=44 mdcat ... | less`). Note bash does not export COLUMNS by
+    //      default, so it must be exported or passed inline to reach us.
+    //   3. The kernel window size of whichever standard stream is a terminal.
+    //   4. A fixed default when none of the above applies (e.g. fully piped with no COLUMNS).
     static const int width = [] {
-        for (int fd : {STDOUT_FILENO, STDERR_FILENO, STDIN_FILENO}) {
-            struct winsize ws;
-            if (ioctl(fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return static_cast<int>(ws.ws_col);
-        }
+        if (gWidthOverride > 0) return gWidthOverride;
         if (const char* cols = std::getenv("COLUMNS")) {
             int w = std::atoi(cols);
             if (w > 0) return w;
+        }
+        for (int fd : {STDOUT_FILENO, STDERR_FILENO, STDIN_FILENO}) {
+            struct winsize ws;
+            if (ioctl(fd, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) return static_cast<int>(ws.ws_col);
         }
         return 100;  // sensible default when not attached to a terminal
     }();
@@ -1010,16 +1019,50 @@ std::vector<std::string> splitLines(std::istream& in) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc > 1) {
+    // Collect the file operands, parsing options first. Supported: --width N / -w N / --width=N to
+    // force the render width (overriding $COLUMNS and the terminal size), and -- to end options so a
+    // filename may begin with a dash. Option parsing stops at the first non-option operand.
+    std::vector<std::string> files;
+    auto usage = [&] { std::cerr << "usage: mdcat [--width N] [--] [file ...]\n"; };
+
+    int a = 1;
+    for (; a < argc; ++a) {
+        std::string arg = argv[a];
+        if (arg == "--") { ++a; break; }
+        if (arg.size() < 2 || arg[0] != '-') break;  // first operand: stop option parsing
+
+        std::string val;
+        bool haveVal = false;
+        if (arg == "-w" || arg == "--width") {        // value is the next argument
+            if (a + 1 >= argc) { std::cerr << "mdcat: " << arg << " requires a value\n"; return 2; }
+            val = argv[++a];
+            haveVal = true;
+        } else if (arg.rfind("--width=", 0) == 0) {   // value is inline after '='
+            val = arg.substr(8);
+            haveVal = true;
+        } else {
+            std::cerr << "mdcat: unknown option: " << arg << "\n";
+            usage();
+            return 2;
+        }
+        if (haveVal) {
+            int w = std::atoi(val.c_str());
+            if (w <= 0) { std::cerr << "mdcat: invalid width: " << val << "\n"; return 2; }
+            gWidthOverride = w;
+        }
+    }
+    for (; a < argc; ++a) files.emplace_back(argv[a]);
+
+    if (!files.empty()) {
         // Render each file independently and concatenate the results, rather than merging the files'
         // lines into one document. This keeps the boundary between files clean: the last block of one
         // file can never merge with the first block of the next. It also makes rendering distribute
         // over the argument list — `mdcat a b` produces exactly `mdcat a` followed by `mdcat b` —
         // which is checked by tests/property-concat.sh.
-        for (int a = 1; a < argc; ++a) {
-            std::ifstream f(argv[a]);
+        for (const auto& path : files) {
+            std::ifstream f(path);
             if (!f) {
-                std::cerr << "mdcat: " << argv[a] << ": cannot open file\n";
+                std::cerr << "mdcat: " << path << ": cannot open file\n";
                 return 1;
             }
             render(splitLines(f), std::cout);

@@ -32,11 +32,19 @@ over every `*.md` in this directory and exits non-zero (printing a diff) on a
 mismatch.
 
 Several tests describe behavior at a specific terminal width. To check those
-deterministically regardless of your real window size, force a width with
-`$COLUMNS` while piping (so the kernel window size doesn't win):
+deterministically regardless of your real window size, force the width with the
+`--width` flag (most reliable, beats everything):
 
 ```
-make && COLUMNS=40 ./mdcat tests/tables-wrap.md | cat
+make && ./mdcat --width 40 tests/tables-wrap.md
+```
+
+`$COLUMNS` also works and takes precedence over the detected terminal size, so
+this is equivalent (export it or pass it inline; bash does not export it by
+default):
+
+```
+make && COLUMNS=40 ./mdcat tests/tables-wrap.md
 ```
 
 | File | Feature under test |
