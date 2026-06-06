@@ -16,19 +16,24 @@ Run them all:
 make && for f in tests/*.md; do printf '\n===== %s =====\n' "$f"; ./mdcat "$f"; done
 ```
 
-## Automated check
+## Automated checks
 
-One property is checked automatically by `property-concat.sh`, run via:
+Two properties are checked automatically. Run both via:
 
 ```
 make check
 ```
 
-It asserts that rendering distributes over the file-argument list — for any
-files, `mdcat f1 f2 ... fn` produces exactly the concatenation of `mdcat f1`,
-`mdcat f2`, ..., `mdcat fn`. This guards the file-boundary handling: the last
-block of one file must never merge with the first block of the next. It runs
-over every `*.md` in this directory and exits non-zero (printing a diff) on a
+`property-concat.sh` asserts that rendering distributes over the file-argument
+list — for any files, `mdcat f1 f2 ... fn` produces exactly the concatenation of
+`mdcat f1`, `mdcat f2`, ..., `mdcat fn`. This guards the file-boundary handling:
+the last block of one file must never merge with the first block of the next.
+
+`property-width.sh` asserts that the two ways of forcing the render width agree:
+`mdcat --width N` and `COLUMNS=N mdcat` produce byte-identical output, checked at
+one non-standard width. This guards the width-precedence logic.
+
+Both run over every `*.md` in this directory and exit non-zero (printing a diff) on a
 mismatch.
 
 Several tests describe behavior at a specific terminal width. To check those

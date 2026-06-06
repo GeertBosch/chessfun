@@ -6,6 +6,7 @@ mdcat: mdcat.cpp
 
 check: mdcat
 	./tests/property-concat.sh
+	./tests/property-width.sh
 
 clean:
 	rm -f mdcat
