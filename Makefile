@@ -12,9 +12,10 @@ gmore: gmore.cpp
 TESTS := \
 	tests/property-concat.sh \
 	tests/property-width.sh \
-	tests/property-blank-lines.sh
+	tests/property-blank-lines.sh \
+	tests/gmore-emulator.sh
 
-check: mdcat
+check: mdcat gmore
 	@fail=0; \
 	for t in $(TESTS); do \
 		name=$$(basename $$t .sh); \
