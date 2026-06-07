@@ -66,6 +66,12 @@ const std::string kQuoteBar = "\033[38;5;244m▎\033[0m ";  // the left rule dra
 // before any rendering, and so before terminalWidth() is first called and caches its result.
 int gWidthOverride = 0;
 
+// Force inline image (sixel) output even when stdout is not a terminal (--img). Lets mdcat be used
+// as a sixel source when piped, e.g. `mdcat --img doc.md | gmore` for visual pager testing. Set by
+// main() before rendering, so before terminalSupportsGraphics() caches its result. Cell-size detection
+// still works over /dev/tty, and the terminal width is read from $COLUMNS / stderr's TIOCGWINSZ.
+bool gForceGraphics = false;
+
 // Columns currently consumed by container-block decorations (the block-quote left rule, a list
 // item's marker indent). Every nested container raises it by the width of its prefix while its
 // content is being rendered, so the width that paragraphs reflow to and that tables and rules fill
@@ -130,6 +136,7 @@ int terminalWidth() {
 // motivating case. When output is not a terminal at all, there is likewise nothing to draw to.
 bool terminalSupportsGraphics() {
     static const bool supported = [] {
+        if (gForceGraphics) return true;              // --img: emit sixels even when piped
         if (!isatty(STDOUT_FILENO)) return false;
         if (const char* prog = std::getenv("TERM_PROGRAM")) {
             if (std::string(prog) == "Apple_Terminal") return false;
@@ -1682,13 +1689,18 @@ int main(int argc, char** argv) {
     // force the render width (overriding $COLUMNS and the terminal size), and -- to end options so a
     // filename may begin with a dash. Option parsing stops at the first non-option operand.
     std::vector<std::string> files;
-    auto usage = [&] { std::cerr << "usage: mdcat [--width N] [--] [file ...]\n"; };
+    auto usage = [&] { std::cerr << "usage: mdcat [--width N] [--img] [--] [file ...]\n"; };
 
     int a = 1;
     for (; a < argc; ++a) {
         std::string arg = argv[a];
         if (arg == "--") { ++a; break; }
         if (arg.size() < 2 || arg[0] != '-') break;  // first operand: stop option parsing
+
+        if (arg == "--img") {                         // force sixel output even when piped
+            gForceGraphics = true;
+            continue;
+        }
 
         std::string val;
         bool haveVal = false;
