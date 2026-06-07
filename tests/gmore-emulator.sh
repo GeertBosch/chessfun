@@ -45,7 +45,7 @@ check() {
 
 # dump COLS FILE — render FILE's emulated grid at the given width (width passed
 # explicitly, not via an env prefix, to avoid var-assignment leaking across cases).
-dump() { COLUMNS="$1" LINES=24 "$gmore" --dump "$2"; }
+dump() { COLUMNS="$1" LINES=24 GMORE_CELLW=8 GMORE_CELLH=16 "$gmore" --dump "$2"; }
 mkin() { printf '%b' "$1" > "$tmp/in"; }
 
 # 1. plain text round-trips exactly
@@ -76,9 +76,11 @@ check "sgr colour"       '\033[0;38;5;1mRED\033[0m x\n' dump 80 "$tmp/in"
 mkin '\033]8;;https://example.com\033\\click\033]8;;\033\\ here\n'
 check "osc8 skipped"     'click here\n'          dump 80 "$tmp/in"
 
-# 8. a sixel DCS is swallowed without garbling the text around it
+# 8. a sixel DCS reserves vertical space (decoded + anchored, cursor advances below
+#    the image); surrounding text is intact, just on its own rows. 6px tall @ cellH=16
+#    -> 1 cell, so "after" lands on the next row.
 mkin 'before\033Pq#0;2;0;0;0#0~~~\033\\after\n'
-check "sixel skipped"    'beforeafter\n'         dump 80 "$tmp/in"
+check "sixel reserves row" 'before\nafter\n'     dump 80 "$tmp/in"
 
 # 9. non-tty, non-dump: pass the input through verbatim (pager-as-cat)
 mkin 'raw\nbytes\n'

@@ -13,6 +13,7 @@
 // emulated grid to stdout (no paging) for testing.
 
 #include <algorithm>
+#include <cctype>
 #include <csignal>
 #include <cstdint>
 #include <cstdio>
@@ -116,12 +117,103 @@ std::string sgrFor(uint16_t id) {
 }
 
 // ---------------------------------------------------------------------------
+// Sixel images. Decoded once to an RGBA raster (px[y*Ph + x]; 0 = unset/transparent,
+// else 0xFFrrggbb). Anchored in the grid at an absolute row + column. The 18px-strip
+// rendering re-encodes row ranges on demand (next milestone).
+// ---------------------------------------------------------------------------
+struct Image {
+    size_t row = 0;       // absolute grid row of the image's top
+    int col = 0;          // column of the image's left edge
+    int Ph = 0, Pv = 0;   // painted pixel size
+    std::vector<uint32_t> px;
+};
+
+// Decode a sixel DCS payload (everything after `ESC P`, up to but not including ST)
+// into img. Handles the intro params, `"`-raster attrs, `#`-colour define/select
+// (RGB; HLS approximated), the `?`..`~` sixel bytes, `!`-run-length, `$` (CR) and
+// `-` (graphics newline). Returns true on a non-empty raster.
+bool decodeSixel(const std::string& s, Image& img) {
+    size_t i = 0;
+    while (i < s.size() && s[i] != 'q') ++i;   // skip intro params P1;P2;P3
+    if (i >= s.size()) return false;
+    ++i;                                       // past 'q'
+
+    auto readNums = [&](std::vector<int>& v) {
+        std::string n;
+        while (i < s.size() && (std::isdigit((unsigned char)s[i]) || s[i] == ';')) {
+            if (s[i] == ';') { v.push_back(n.empty() ? 0 : std::atoi(n.c_str())); n.clear(); }
+            else n += s[i];
+            ++i;
+        }
+        if (!n.empty()) v.push_back(std::atoi(n.c_str()));
+    };
+
+    int Ph = 0, Pv = 0;
+    std::unordered_map<int, uint32_t> pal;
+    int cur = 0, x = 0, band = 0, maxX = 0;
+    std::vector<std::vector<uint32_t>> g;       // g[pixelRow][x]
+    auto colorOf = [&](int idx) { auto it = pal.find(idx); return it != pal.end() ? it->second : 0xFF000000u; };
+    auto setpx = [&](int px_x, int px_y, uint32_t c) {
+        if ((size_t)px_y >= g.size()) g.resize(px_y + 1);
+        auto& r = g[px_y];
+        if ((size_t)px_x >= r.size()) r.resize(px_x + 1, 0);
+        r[px_x] = c;
+    };
+    auto plot = [&](int bits, int n) {
+        for (int r = 0; r < n; ++r) {
+            for (int b = 0; b < 6; ++b) if (bits & (1 << b)) setpx(x, band * 6 + b, colorOf(cur));
+            ++x;
+        }
+        if (x > maxX) maxX = x;
+    };
+
+    while (i < s.size()) {
+        char c = s[i];
+        if (c == '"') { ++i; std::vector<int> v; readNums(v); if (v.size() >= 4) { Ph = v[2]; Pv = v[3]; } continue; }
+        if (c == '#') {
+            ++i; std::vector<int> v; readNums(v);
+            if (v.size() == 1) cur = v[0];
+            else if (v.size() >= 5) {
+                int idx = v[0], pu = v[1];
+                uint32_t rgb = (pu == 2)
+                    ? (0xFF000000u | ((v[2] * 255 / 100) << 16) | ((v[3] * 255 / 100) << 8) | (v[4] * 255 / 100))
+                    : 0xFF808080u;            // HLS: approximate (our sources use RGB)
+                pal[idx] = rgb; cur = idx;
+            }
+            continue;
+        }
+        if (c == '!') {
+            ++i; std::string n; while (i < s.size() && std::isdigit((unsigned char)s[i])) n += s[i++];
+            int cnt = std::max(1, std::atoi(n.c_str()));
+            if (i < s.size() && s[i] >= '?' && s[i] <= '~') plot(s[i++] - '?', cnt);
+            continue;
+        }
+        if (c == '$') { x = 0; ++i; continue; }
+        if (c == '-') { x = 0; ++band; ++i; continue; }
+        if (c >= '?' && c <= '~') { plot(c - '?', 1); ++i; continue; }
+        ++i;                                   // ignore stray bytes (whitespace, etc.)
+    }
+
+    if (Ph <= 0) Ph = maxX;
+    if (Pv <= 0) Pv = (int)g.size();
+    if (Ph <= 0 || Pv <= 0) return false;
+    img.Ph = Ph; img.Pv = Pv;
+    img.px.assign((size_t)Ph * Pv, 0);
+    for (int y = 0; y < Pv && y < (int)g.size(); ++y)
+        for (int xx = 0; xx < Ph && xx < (int)g[y].size(); ++xx)
+            img.px[(size_t)y * Ph + xx] = g[y][xx];
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // The emulator: a cell grid (rows grow downward = scrollback) with a screen
 // viewport [top, top+H) in which the cursor lives, fed bytes by a state machine.
 // ---------------------------------------------------------------------------
 struct Emulator {
     int W, H;
+    int cellW, cellH;        // pixels per cell (for sizing sixel images)
     std::vector<std::vector<Cell>> rows;
+    std::vector<Image> images;
     size_t top = 0;          // absolute index of screen row 0
     int cr = 0, cc = 0;      // cursor, screen-relative
     Attr pen;                // current pen
@@ -135,7 +227,8 @@ struct Emulator {
     char32_t uacc = 0;       // UTF-8 accumulator
     int uneed = 0;
 
-    Emulator(int w, int h) : W(w < 1 ? 1 : w), H(h < 1 ? 1 : h) { ensure(); }
+    Emulator(int w, int h, int cw, int ch)
+        : W(w < 1 ? 1 : w), H(h < 1 ? 1 : h), cellW(cw < 1 ? 1 : cw), cellH(ch < 1 ? 1 : ch) { ensure(); }
 
     void ensure() { while (rows.size() < top + static_cast<size_t>(H)) rows.emplace_back(W); }
     std::vector<Cell>& screen(int r) { return rows[top + r]; }
@@ -236,11 +329,22 @@ struct Emulator {
         if (b == 0x1B) { escPend = true; return; }
         seq.push_back(static_cast<char>(b));
     }
-    // DCS (sixel): skip until ST (kept as a no-op; decode + image layer land here later).
+    // DCS (sixel): accumulate until ST, then decode + anchor the image.
     void dcs(unsigned char b) {
-        if (escPend) { if (b == '\\') { st = GROUND; return; } escPend = false; }
+        if (escPend) { if (b == '\\') { finishSixel(); st = GROUND; return; } escPend = false; }
         if (b == 0x1B) { escPend = true; return; }
         seq.push_back(static_cast<char>(b));
+    }
+    // Decode the captured sixel, anchor it at the cursor, and advance the cursor to
+    // the row directly below the image, column 0 (the terminal's post-sixel behaviour).
+    void finishSixel() {
+        Image img;
+        if (!decodeSixel(seq, img)) return;
+        img.row = top + cr; img.col = cc;
+        images.push_back(std::move(img));
+        int rowsCells = (images.back().Pv + cellH - 1) / cellH;
+        cc = 0;
+        for (int k = 0; k < rowsCells; ++k) { if (cr + 1 >= H) scrollUp(); else ++cr; }
     }
 
     void dispatchCsi(char final) {
@@ -371,10 +475,11 @@ int envInt(const char* name, int def) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    bool dump = false;
+    bool dump = false, imginfo = false;
     const char* path = nullptr;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--dump") == 0) dump = true;
+        else if (std::strcmp(argv[i], "--imginfo") == 0) imginfo = true;
         else if (std::strcmp(argv[i], "-") == 0) path = nullptr;
         else path = argv[i];
     }
@@ -392,20 +497,41 @@ int main(int argc, char** argv) {
 
     // Terminal size: real size when interactive, else env/defaults (for --dump/tests).
     int H = envInt("LINES", 24), W = envInt("COLUMNS", 80);
+    int cellW = envInt("GMORE_CELLW", 0), cellH = envInt("GMORE_CELLH", 0);
     struct winsize ws;
     if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) {
         H = ws.ws_row; W = ws.ws_col;
+        if (!cellW && ws.ws_xpixel > 0 && ws.ws_col > 0) cellW = ws.ws_xpixel / ws.ws_col;
+        if (!cellH && ws.ws_ypixel > 0 && ws.ws_row > 0) cellH = ws.ws_ypixel / ws.ws_row;
     }
+    if (!cellW) cellW = 8;
+    if (!cellH) cellH = 16;
 
-    // Not a terminal and not --dump: pass through verbatim (pager-as-cat).
-    if (!isatty(STDOUT_FILENO) && !dump) {
+    // Not a terminal and not --dump/--imginfo: pass through verbatim (pager-as-cat).
+    if (!isatty(STDOUT_FILENO) && !dump && !imginfo) {
         fwrite(data.data(), 1, data.size(), stdout);
         return 0;
     }
 
-    Emulator em(W, H);
+    Emulator em(W, H, cellW, cellH);
     em.feed(data.data(), data.size());
     const size_t total = em.contentRows();
+
+    if (imginfo) {
+        for (size_t k = 0; k < em.images.size(); ++k) {
+            const Image& I = em.images[k];
+            int cols = (I.Ph + cellW - 1) / cellW, rws = (I.Pv + cellH - 1) / cellH;
+            std::printf("image %zu @%zu,%d %dx%dpx %dx%dcells\n", k + 1, I.row, I.col, I.Ph, I.Pv, cols, rws);
+            if (I.Ph <= 40 && I.Pv <= 40) {       // small enough to show as ASCII
+                for (int y = 0; y < I.Pv; ++y) {
+                    std::string line;
+                    for (int x = 0; x < I.Ph; ++x) line += I.px[(size_t)y * I.Ph + x] ? '#' : '.';
+                    std::printf("%s\n", line.c_str());
+                }
+            }
+        }
+        return 0;
+    }
 
     auto emitRow = [&](size_t r) { std::string s; em.renderRow(r, s); fwrite(s.data(), 1, s.size(), stdout); };
 
