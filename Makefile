@@ -1,7 +1,12 @@
 CXX ?= c++
 CXXFLAGS ?= -std=c++17 -O2 -Wall
 
+all: mdcat gmore
+
 mdcat: mdcat.cpp
+	$(CXX) $(CXXFLAGS) -o $@ $<
+
+gmore: gmore.cpp
 	$(CXX) $(CXXFLAGS) -o $@ $<
 
 TESTS := \
@@ -24,6 +29,6 @@ check: mdcat
 	exit $$fail
 
 clean:
-	rm -f mdcat
+	rm -f mdcat gmore
 
-.PHONY: check clean
+.PHONY: all check clean
