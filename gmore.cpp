@@ -226,6 +226,7 @@ struct Emulator {
     bool escPend = false;    // saw ESC inside OSC/DCS (looking for ST '\')
     char32_t uacc = 0;       // UTF-8 accumulator
     int uneed = 0;
+    bool absorbLf = false;   // swallow one LF right after a sixel (cursor is already below it)
 
     Emulator(int w, int h, int cw, int ch)
         : W(w < 1 ? 1 : w), H(h < 1 ? 1 : h), cellW(cw < 1 ? 1 : cw), cellH(ch < 1 ? 1 : ch) { ensure(); }
@@ -283,6 +284,11 @@ struct Emulator {
     }
 
     void ground(unsigned char b) {
+        // A sixel leaves the cursor below the image; producers (timg) still emit a
+        // trailing LF, which the terminal absorbs. Swallow exactly that one LF, else
+        // every image after the first drifts down a row (timg climbs back by the
+        // image height, not height+1).
+        if (absorbLf) { absorbLf = false; if (b == '\n') return; }
         if (b == 0x1B) { st = ESC; return; }
         if (uneed > 0) {                                   // UTF-8 continuation
             if ((b & 0xC0) == 0x80) { uacc = (uacc << 6) | (b & 0x3F); if (--uneed == 0) put(uacc); }
@@ -345,6 +351,7 @@ struct Emulator {
         int rowsCells = (images.back().Pv + cellH - 1) / cellH;
         cc = 0;
         for (int k = 0; k < rowsCells; ++k) { if (cr + 1 >= H) scrollUp(); else ++cr; }
+        absorbLf = true;   // a single trailing LF from the producer is now redundant
     }
 
     void dispatchCsi(char final) {

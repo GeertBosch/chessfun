@@ -41,6 +41,7 @@ check() {
 
 ii()  { GMORE_CELLW=8 GMORE_CELLH=16 "$gmore" --imginfo "$1"; }   # full --imginfo
 ii1() { ii "$1" | head -1; }                                      # first (summary) line
+iig() { ii "$1" | grep '^image'; }                                # just the summary lines
 mkin() { printf '%b' "$1" > "$tmp/in"; }
 
 # a 4x6 solid block (~ = all six bits) -> every pixel opaque
@@ -66,6 +67,14 @@ check "run-length" 'image 1 @0,0 4x6px 1x1cells\n' ii1 "$tmp/in"
 # anchor column tracks the cursor: two leading chars -> column 2
 mkin 'XY\033Pq"1;1;4;6#0;2;100;0;0#0~~~~\033\\'
 check "anchor column" 'image 1 @0,2 4x6px 1x1cells\n' ii1 "$tmp/in"
+
+# grid protocol: a sixel leaves the cursor below the image; the producer's trailing
+# LF is absorbed, so after LF + up1 + right8 the next image shares the SAME row.
+# (Without the LF-absorb, the second image would drift to row 1 — the timg grid bug.)
+mkin '\033Pq"1;1;4;6#0;2;100;0;0#0~~~~\033\\\n\033[1A\033[8C\033Pq"1;1;4;6#0;2;0;100;0#0~~~~\033\\'
+check "grid same row" \
+    'image 1 @0,0 4x6px 1x1cells\nimage 2 @0,8 4x6px 1x1cells\n' \
+    iig "$tmp/in"
 
 if [ "$fails" -eq 0 ]; then
     echo "gmore-sixel: OK ($n cases)"
