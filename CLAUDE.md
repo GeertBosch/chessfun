@@ -20,3 +20,9 @@ of work stays a single commit. Intermediate states remain recoverable via
 After each substantial commit, check whether the change makes any existing
 memory inaccurate or incomplete, and whether it introduces something worth
 remembering. Update the affected memories or save new ones accordingly.
+
+## Leave stray files alone
+
+For stray/untracked files you didn't create (scratch output, temp files), just
+leave them be: don't commit them, don't delete them, and don't add them to
+`.gitignore`.
