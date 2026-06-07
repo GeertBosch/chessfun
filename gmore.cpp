@@ -472,6 +472,52 @@ int envInt(const char* name, int def) {
     return x > 0 ? x : def;
 }
 
+// Terminal rows/cols (and pixel size when the kernel reports it). Tries stdout,
+// then stderr/stdin, then /dev/tty — so it still works when stdout is a pipe
+// (e.g. `timg … | gmore`), where ioctl on stdout fails.
+bool getWinsize(struct winsize& w) {
+    for (int fd : {STDOUT_FILENO, STDERR_FILENO, STDIN_FILENO})
+        if (ioctl(fd, TIOCGWINSZ, &w) == 0 && w.ws_row > 0) return true;
+    int t = open("/dev/tty", O_RDONLY | O_NOCTTY);
+    if (t >= 0) { bool ok = ioctl(t, TIOCGWINSZ, &w) == 0 && w.ws_row > 0; close(t); if (ok) return true; }
+    return false;
+}
+
+// Ask the terminal for its cell pixel size via the CSI 16t report (reply
+// "ESC[6;H;Wt"), over /dev/tty so it works when piped, in raw mode with a short
+// timeout. Needed because VSCode's terminal does not report pixels via
+// TIOCGWINSZ; without this gmore defaulted to a wrong cell height, so its
+// post-sixel cursor advance disagreed with timg's grid moves (image drift).
+struct CellSize { int w, h; };
+CellSize queryCellSize16t() {
+    int fd = open("/dev/tty", O_RDWR | O_NOCTTY);
+    if (fd < 0) return {0, 0};
+    struct termios saved {};
+    if (tcgetattr(fd, &saved) != 0) { close(fd); return {0, 0}; }
+    struct termios raw = saved;
+    raw.c_lflag &= ~static_cast<tcflag_t>(ICANON | ECHO);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 2;  // 0.2s inter-byte timeout
+    tcsetattr(fd, TCSANOW, &raw);
+    static const char query[] = "\033[16t";
+    CellSize cs{0, 0};
+    if (write(fd, query, sizeof query - 1) == static_cast<ssize_t>(sizeof query - 1)) {
+        std::string reply;
+        char c;
+        while (reply.size() < 32) {
+            ssize_t n = read(fd, &c, 1);
+            if (n <= 0) break;
+            reply += c;
+            if (c == 't') break;
+        }
+        int h = 0, w = 0;
+        if (std::sscanf(reply.c_str(), "\033[6;%d;%dt", &h, &w) == 2 && w > 0 && h > 0) cs = {w, h};
+    }
+    tcsetattr(fd, TCSANOW, &saved);
+    close(fd);
+    return cs;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -495,15 +541,25 @@ int main(int argc, char** argv) {
 
     internAttr(Attr{});  // id 0 = default
 
-    // Terminal size: real size when interactive, else env/defaults (for --dump/tests).
-    int H = envInt("LINES", 24), W = envInt("COLUMNS", 80);
+    // Terminal geometry. Env wins (for --dump/tests); then the kernel's TIOCGWINSZ
+    // (rows/cols, and pixel size if present); then CSI 16t for the cell pixel size
+    // (VSCode reports it only this way); then defaults. Size is read from /dev/tty/
+    // stderr too, so it's correct even when stdout is a pipe (timg | gmore).
+    int H = envInt("LINES", 0), W = envInt("COLUMNS", 0);
     int cellW = envInt("GMORE_CELLW", 0), cellH = envInt("GMORE_CELLH", 0);
     struct winsize ws;
-    if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_row > 0) {
-        H = ws.ws_row; W = ws.ws_col;
+    if (getWinsize(ws)) {
+        if (!H) H = ws.ws_row;
+        if (!W) W = ws.ws_col;
         if (!cellW && ws.ws_xpixel > 0 && ws.ws_col > 0) cellW = ws.ws_xpixel / ws.ws_col;
         if (!cellH && ws.ws_ypixel > 0 && ws.ws_row > 0) cellH = ws.ws_ypixel / ws.ws_row;
     }
+    if (!cellW || !cellH) {
+        CellSize cs = queryCellSize16t();
+        if (cs.w > 0 && cs.h > 0) { if (!cellW) cellW = cs.w; if (!cellH) cellH = cs.h; }
+    }
+    if (!H) H = 24;
+    if (!W) W = 80;
     if (!cellW) cellW = 8;
     if (!cellH) cellH = 16;
 
