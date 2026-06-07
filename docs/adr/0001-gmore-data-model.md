@@ -76,3 +76,22 @@ struct Attr { uint32_t fg, bg; uint16_t flags; };  // bold/italic/underline/inve
   page-down. This is also what bounds memory for pipes/infinite streams.
 - Rendering re-derives minimal SGR from per-cell attrs (run-length), so each window
   edge is self-contained — no color bleed across the top/bottom of the view.
+
+## Hyperlinks (OSC 8) — planned, requires no rewrite
+
+An OSC 8 hyperlink (`ESC ] 8 ; params ; URI ST` … text … `ESC ] 8 ; ; ST`) is just
+another cell attribute whose value happens to be a URI string. The interned-attr
+model absorbs it additively:
+
+- Extend `Attr` with `uint32 linkId` (index into an interned URI table; 0 = none).
+- Parser: on the OSC 8 open set `pen.linkId = intern(uri)`, on the empty-URI close
+  set it back to 0; stamped cells carry it via their already-interned `Attr` (no
+  per-cell string storage).
+- Render: emit OSC 8 open/close on `linkId` change, run-length like SGR, so each
+  window edge re-opens the link and stays self-contained.
+
+**v1 obligation (even though it ignores links):** the parser MUST recognize and
+**skip** OSC sequences — consume `ESC ] … (BEL | ST)` as a zero-width no-op — so
+link *text* is not garbled. Adding `linkId` later is then purely additive.
+(This is the reason the model rejects packing attributes into a too-tight int:
+a real interned `Attr` struct has room for `linkId`; a packed int would not.)
