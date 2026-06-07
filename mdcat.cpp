@@ -693,7 +693,7 @@ bool sixelPixelSize(const std::string& sixel, int& pw, int& ph) {
 // footprint is computed from the painted pixel size read back out of the sixel (which reflects
 // timg's aspect-preserving fit), divided by the real cell size — not from the requested -g box.
 bool renderImageBlock(const std::string& text, int availWidth, std::string& out, int& cellWidth,
-                      int& cellHeight) {
+                      int& cellHeight, bool forceWidthBound = false) {
     std::map<std::string, std::string> attrs;
     if (!parseImgTag(text, attrs)) return false;
 
@@ -754,7 +754,9 @@ bool renderImageBlock(const std::string& text, int availWidth, std::string& out,
     int wCells = cell.pxToColsNominal(tw);
     int hCells = cell.pxToRowsNominal(th);
     std::string geom;
-    if (availWidth > 0 && wCells > availWidth)
+    if (forceWidthBound && availWidth > 0)
+        geom = std::to_string(availWidth) + "x";          // caller demands an exact column width
+    else if (availWidth > 0 && wCells > availWidth)
         geom = std::to_string(availWidth) + "x";          // width-bound: clamp to the column
     else if (haveH && !haveW)
         geom = "x" + std::to_string(hCells);              // height-bound: width follows aspect
@@ -1106,15 +1108,20 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
         }
     }
 
-    // An image whose column ended up narrower than its natural width (the table could not give it the
-    // room its requested height implied) is re-rendered to fit that width, so it never overflows into
-    // the next column. This is the only case that runs timg twice, and only when columns are tight.
+    // An image whose painted width exceeds its allocated column (the table could not give it the room
+    // its requested height implied) is re-rendered WIDTH-BOUND to exactly that column width, so it
+    // never overflows into the next column or past the table. forceWidthBound is required because the
+    // image's true (real-cell) footprint can exceed the column even when the nominal-cell estimate
+    // does not, so renderImageBlock's own heuristic would otherwise keep it height-bound and too
+    // wide. This is the only case that runs timg twice, and only when columns are tight.
+    std::vector<int> allocWidth = widths;   // the budgeted width; tightening must not exceed it
     for (size_t i = 0; i < rows.size(); ++i) {
         for (size_t j = 0; j < ncols; ++j) {
-            if (!isImage[i][j] || widths[j] >= imgCellW[i][j]) continue;
+            if (!isImage[i][j] || allocWidth[j] >= imgCellW[i][j]) continue;
             std::string block;
             int iw = 0, ih = 0;
-            if (renderImageBlock(imgText[i][j], widths[j], block, iw, ih) && isSixelImage(block)) {
+            if (renderImageBlock(imgText[i][j], allocWidth[j], block, iw, ih, /*forceWidthBound=*/true) &&
+                isSixelImage(block)) {
                 rows[i][j] = block;
                 imgRows[i][j] = std::max(1, ih);
                 imgCellW[i][j] = iw;
@@ -1124,9 +1131,10 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
 
     // Tighten each image column to the width its image actually paints (aspect-fit and rounding can
     // make it narrower than the allocated cap), so a column hugs its image and the gap between
-    // columns stays the intended two spaces rather than padding out to the cap. But never tighten
-    // below the column's widest TEXT cell (e.g. a header wider than the image): doing so would let
-    // that text overflow and push every later column's origin out of alignment.
+    // columns stays the intended two spaces rather than padding out to the cap. Never go below the
+    // column's widest TEXT cell (a header wider than the image would overflow and misalign later
+    // columns) and never ABOVE the budgeted width (which would overflow the table — a re-render can
+    // round a cell or two wide).
     for (size_t j = 0; j < ncols; ++j) {
         if (imgWidth[j] <= 0) continue;
         int w = 0;
@@ -1136,13 +1144,21 @@ void emitTable(const std::vector<std::string>& rawRows, std::ostream& out) {
             else
                 for (auto& ln : splitOnNewlines(rows[i][j])) w = std::max(w, displayWidth(ln));
         }
-        if (w > 0) widths[j] = w;
+        if (w > 0) widths[j] = std::min(w, allocWidth[j]);
     }
 
     int total = 0;
     for (int w : widths) total += w;
     total += 2 * static_cast<int>(ncols - 1);  // two-space column separators
     std::string hline = horizontalLine(total);
+
+    if (std::getenv("MDCAT_DEBUG_TABLE")) {
+        std::fprintf(stderr, "mdcat: table W=%d budget=%d total=%d widths=[", W, budget, total);
+        for (size_t j = 0; j < ncols; ++j) std::fprintf(stderr, "%s%d", j ? "," : "", widths[j]);
+        std::fprintf(stderr, "] imgW=[");
+        for (size_t j = 0; j < ncols; ++j) std::fprintf(stderr, "%s%d", j ? "," : "", imgWidth[j]);
+        std::fprintf(stderr, "]\n");
+    }
 
     // The 1-based starting column of each cell, accounting for the two-space separators. Used to
     // position image sixels during the overlay pass.
