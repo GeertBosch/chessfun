@@ -15,9 +15,7 @@ startpos() {
 
 echo "expfen <fen> - expands a FEN placement so empty squares become '_'"
 expfen() {
-	if (($# != 1)) ; then
-		error "expfen <fen>"
-	fi
+	(($# == 1)) || error "expfen <fen>"
 	set - $1
 	underscores=""
 	exp=${1//./_}
@@ -45,9 +43,7 @@ normplmt() {
 
 echo "normfen <fen> - normalizes FEN, reversing expfen"
 normfen() {
-	if (($# != 1)) ; then
-		error "normfen <fen>"
-	fi
+	(($# == 1)) || error "normfen <fen>"
 	set - $(expfen "$1")
 	local norm=$(normplmt "$1")
 	shift
@@ -239,9 +235,7 @@ decdhl() {
 
 echo "chessrow <bg1> <bg2> <fenrow> - prints a chess row with alternating background colors"
 chessrow() {
-	if (($# < 3)) ; then
-		error "chessrow <bg1> <bg2> <fenrow>"
-	fi
+	(($# >= 3)) || error "chessrow <bg1> <bg2> <fenrow>"
 	bg1=$1
 	bg2=$2
 	row=$(echo "$3" | tr "." " ")
@@ -263,9 +257,7 @@ chessrow() {
 
 echo "chessboard <fen> - prints a chess board for the given FEN piece placement"
 chessboard() {
-	if (($# < 1)) ; then
-		error "chessboard <fen>"
-	fi
+	(($# >= 1)) || error "chessboard <fen>"
 	bg1=187
 	bg2=64
 	set - $(echo "$(expfen $*)" | tr '/' '\n')
@@ -280,9 +272,7 @@ chessboard() {
 
 echo "flip <fen> - flips white and black pieces and perspective in a FEN string"
 flip() {
-	if (($# < 1)) ; then
-		error "flip <fen>"
-	fi
+	(($# >= 1)) || error "flip <fen>"
 	echo -n $(echo "$1" | tr '/' '\n' | tail -r | rev) | tr ' ' '/'
 	shift
 	if (($# >= 1)) ; then
@@ -314,9 +304,7 @@ flip() {
 
 echo "fish <fen> [depth] - runs stockfish on the position with the given depth"
 fish() {
-	if (($# < 1)) ; then
-		error "fish <fen> [depth]"
-	fi
+	(($# >= 1)) || error "fish <fen> [depth]"
 	fen=$1
 	depth=9
 	shift
@@ -332,9 +320,7 @@ go depth $depth
 
 echo "nnue <fen> - prints Stockfish's NNUE evaluation for the given FEN position"
 nnue() {
-	if (($# < 1)) ; then
-		error "nnue <fen>"
-	fi
+	(($# >= 1)) || error "nnue <fen>"
 		fen=$1
 		shift
 		echo "\
@@ -405,13 +391,9 @@ perftnext() {
 	depth="$2"
 	next=$(perftdiff "$fen" $2 | egrep "^[-+][a-h][1-8][a-h][1-8]([qrbn])?:|^[+-]Fen" | head -1 | cut -c2-)
 	echo "next: $next, result $?"
-	if [ $? != 0 ] ; then
-		error "error $?, result $next"
-	fi
+	[ $? == 0 ] || error "error $?, result $next"
 	move=$(echo "$next" | cut -d: -f1)
-	if [ "$move" == "Fen" ] ; then
-		error 2 "Incorrect Fen: $next"
-	fi
+	[ "$move" != "Fen" ] || error 2 "Incorrect Fen: $next"
 	echo "Move: $move"
 	nextfen=$(apply "$fen" "$move"| egrep "Fen:" | cut -d" " -f2-)
 	echo "perftnext \"$nextfen\"" $((depth - 1))
