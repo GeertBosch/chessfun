@@ -42,6 +42,13 @@ plain() {
 	"$@" | LC_ALL=C sed $'s/\033\[[0-9;]*m//g'
 }
 
+echo "== error reporting"
+check "oops" error oops
+check "" eval '(error oops) 2> /dev/null'	# the message goes to stderr, not stdout
+check "1" eval '(error oops) 2> /dev/null ; echo $?'
+check "3" eval '(error 3 oops) 2> /dev/null ; echo $?'
+check "42" eval '(error 42) 2>&1'	# a lone number is the message, not the code
+
 echo "== placement encoding"
 check "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1" startpos
 check "rnbqkbnr/pppppppp/________/________/________/________/PPPPPPPP/RNBQKBNR w KQkq - 0 1" \
@@ -140,7 +147,7 @@ check "4k3/8/8/8/8/8/8/4K3 w KQkq - 0 1" applymoves 4k3/8/8/8/8/8/8/4K3 w KQkq -
 echo "== applymoves: usage"
 check "applymoves <fen> <ucimove> ..." applymoves
 check "$(startpos)" applymoves startpos	# no moves: the position is returned unchanged
-applymoves > /dev/null 2>&1
+(applymoves) > /dev/null 2>&1
 [ $? -eq 1 ] || { failed=$((failed + 1)) ; echo "FAIL: applymoves without arguments should exit 1" ; }
 
 echo "== flip"

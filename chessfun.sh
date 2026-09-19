@@ -1,5 +1,13 @@
 # chess utility bash shell functions for testing and debugging
 
+# error [code] <message> - prints message to stderr and exits with code, default 1
+error() {
+	local code=1
+	[[ "$1" =~ ^[0-9]+$ ]] && (($# > 1)) && { code=$1 ; shift ; }
+	echo "$*" >&2
+	exit "$code"
+}
+
 echo "startpos - outputs the FEN for the standard starting position"
 startpos() {
 		echo "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
@@ -8,8 +16,7 @@ startpos() {
 echo "expfen <fen> - expands a FEN placement so empty squares become '_'"
 expfen() {
 	if (($# != 1)) ; then
-		echo "expfen <fen>"
-		return 1
+		error "expfen <fen>"
 	fi
 	set - $1
 	underscores=""
@@ -39,8 +46,7 @@ normplmt() {
 echo "normfen <fen> - normalizes FEN, reversing expfen"
 normfen() {
 	if (($# != 1)) ; then
-		echo "normfen <fen>"
-		return 1
+		error "normfen <fen>"
 	fi
 	set - $(expfen "$1")
 	local norm=$(normplmt "$1")
@@ -186,8 +192,7 @@ applymoves() {
 		fen="$1 $2 $3 $4 $5 $6" # a FEN spells out its six fields as separate arguments
 		shift 6
 	else
-		echo "applymoves <fen> <ucimove> ..."
-		return 1
+		error "applymoves <fen> <ucimove> ..."
 	fi
 	[ "$1" == "moves" ] && shift
 
@@ -235,8 +240,7 @@ decdhl() {
 echo "chessrow <bg1> <bg2> <fenrow> - prints a chess row with alternating background colors"
 chessrow() {
 	if (($# < 3)) ; then
-		echo "chessrow <bg1> <bg2> <fenrow>"
-		return 1
+		error "chessrow <bg1> <bg2> <fenrow>"
 	fi
 	bg1=$1
 	bg2=$2
@@ -260,8 +264,7 @@ chessrow() {
 echo "chessboard <fen> - prints a chess board for the given FEN piece placement"
 chessboard() {
 	if (($# < 1)) ; then
-		echo "chessboard <fen>"
-		return 1
+		error "chessboard <fen>"
 	fi
 	bg1=187
 	bg2=64
@@ -278,8 +281,7 @@ chessboard() {
 echo "flip <fen> - flips white and black pieces and perspective in a FEN string"
 flip() {
 	if (($# < 1)) ; then
-		echo "flip <fen>"
-		return 1
+		error "flip <fen>"
 	fi
 	echo -n $(echo "$1" | tr '/' '\n' | tail -r | rev) | tr ' ' '/'
 	shift
@@ -313,8 +315,7 @@ flip() {
 echo "fish <fen> [depth] - runs stockfish on the position with the given depth"
 fish() {
 	if (($# < 1)) ; then
-		echo "fish <fen> [depth]"
-		return 1
+		error "fish <fen> [depth]"
 	fi
 	fen=$1
 	depth=9
@@ -332,8 +333,7 @@ go depth $depth
 echo "nnue <fen> - prints Stockfish's NNUE evaluation for the given FEN position"
 nnue() {
 	if (($# < 1)) ; then
-		echo "nnue <fen>"
-		return 1
+		error "nnue <fen>"
 	fi
 		fen=$1
 		shift
@@ -365,8 +365,7 @@ checkperft() {
 # Compare a perft run on a  base FEN position followed by some moves at the given depth
 perftdiff() {
 	if [ $# == 0 ] ; then
-		echo "peftdiff fen depth"
-		return 1
+		error "peftdiff fen depth"
 	elif [ $# == 1 ] ; then
 		echo "set fen to startpos"
 		fen="startpos"
@@ -407,13 +406,11 @@ perftnext() {
 	next=$(perftdiff "$fen" $2 | egrep "^[-+][a-h][1-8][a-h][1-8]([qrbn])?:|^[+-]Fen" | head -1 | cut -c2-)
 	echo "next: $next, result $?"
 	if [ $? != 0 ] ; then
-		echo "error $?, result $next"
-		return 1
+		error "error $?, result $next"
 	fi
 	move=$(echo "$next" | cut -d: -f1)
 	if [ "$move" == "Fen" ] ; then
-		echo "Incorrect Fen: $next"
-		return 2
+		error 2 "Incorrect Fen: $next"
 	fi
 	echo "Move: $move"
 	nextfen=$(apply "$fen" "$move"| egrep "Fen:" | cut -d" " -f2-)
