@@ -69,6 +69,111 @@ fenput() {
 	normplmt "${exp:0:$pos}$3${exp:$((pos+1))}"
 }
 
+# ispawn <piece> - true if the piece is a pawn of either color
+ispawn() {
+	[[ "$1" == [Pp] ]]
+}
+
+# sqrshift <square> <filedelta> <rankdelta> - square shifted by the deltas, empty if off the board
+sqrshift() {
+	local files=abcdefgh
+	local file=$(( $(printf '%d' "'${1:0:1}") - 97 + $2 )) rank=$(( ${1:1:1} + $3 ))
+	(( file < 0 || file > 7 || rank < 1 || rank > 8 )) && return 0
+	echo "${files:file:1}$rank"
+}
+
+# epvictim <piece> <to> <enpassant> - square of the pawn captured en passant, empty if no such capture
+epvictim() {
+	ispawn "$1" && [ "$3" != "-" ] && [ "$2" == "$3" ] || return 0
+	[ "$1" == "P" ] && sqrshift "$2" 0 -1 || sqrshift "$2" 0 1
+}
+
+# movecastlingrook <placement> <piece> <ucimove> - placement with the castling rook relocated, if castling
+movecastlingrook() {
+	local placement=$1 rookfrom rookto rook
+	case "$2$3" in
+	Ke1g1) rookfrom=h1 rookto=f1 rook=R ;;
+	Ke1c1) rookfrom=a1 rookto=d1 rook=R ;;
+	ke8g8) rookfrom=h8 rookto=f8 rook=r ;;
+	ke8c8) rookfrom=a8 rookto=d8 rook=r ;;
+	*) echo "$placement" ; return ;;
+	esac
+	placement=$(fenput "$placement" "$rookfrom" "_")
+	fenput "$placement" "$rookto" "$rook"
+}
+
+# promotedpiece <piece> <promo> - the piece to put on the destination square, promoting if promo is given
+promotedpiece() {
+	[ -n "$2" ] || { echo "$1" ; return ; }
+	[ "$1" == "P" ] || { echo "$2" ; return ; } # black promotion letters need no mapping
+	case "$2" in
+	q) echo Q ;; r) echo R ;; b) echo B ;; n) echo N ;;
+	esac
+}
+
+# updatecastling <castling> <from> <to> - castling rights after a move touching the given squares
+updatecastling() {
+	local rights=$1 sqr
+	for sqr in "$2" "$3" ; do
+		case "$sqr" in
+		e1) rights=${rights//[KQ]/} ;;
+		e8) rights=${rights//[kq]/} ;;
+		h1) rights=${rights//K/} ;;
+		a1) rights=${rights//Q/} ;;
+		h8) rights=${rights//k/} ;;
+		a8) rights=${rights//q/} ;;
+		esac
+	done
+	echo "${rights:--}"
+}
+
+# newenpassant <placement> <piece> <from> <to> - en passant square after a double pawn push that an
+# enemy pawn can actually answer, '-' otherwise
+newenpassant() {
+	local placement=$1 piece=$2 from=$3 to=$4 dir enemy adjacent delta
+	case "$piece" in
+	P) dir=1 ; enemy=p ;;
+	p) dir=-1 ; enemy=P ;;
+	*) echo "-" ; return ;;
+	esac
+	(( ${to:1:1} - ${from:1:1} == 2 * dir )) || { echo "-" ; return ; }
+	for delta in -1 1 ; do
+		adjacent=$(sqrshift "$to" $delta 0)
+		[ -n "$adjacent" ] && [ "$(fenget "$placement" "$adjacent")" == "$enemy" ] \
+			&& { sqrshift "$to" 0 $((-dir)) ; return ; }
+	done
+	echo "-"
+}
+
+# newhalfmove <halfmove> <piece> <captured> <epvictim> - halfmove clock, reset by pawn moves and captures
+newhalfmove() {
+	ispawn "$2" || [ "$3" != "_" ] || [ -n "$4" ] && echo 0 || echo $(($1 + 1))
+}
+
+# applymove <fen> <ucimove> - returns the FEN after applying a single UCI move
+applymove() {
+	local placement active castling enpassant halfmove fullmove
+	read placement active castling enpassant halfmove fullmove <<< "$1"
+	local move=$2 from=${2:0:2} to=${2:2:2} promo=${2:4:1}
+	local piece captured epsqr
+	piece=$(fenget "$placement" "$from")
+	captured=$(fenget "$placement" "$to")
+	epsqr=$(epvictim "$piece" "$to" "$enpassant")
+
+	placement=$(fenput "$placement" "$from" "_")
+	[ -n "$epsqr" ] && placement=$(fenput "$placement" "$epsqr" "_")
+	placement=$(movecastlingrook "$placement" "$piece" "$move")
+	placement=$(fenput "$placement" "$to" "$(promotedpiece "$piece" "$promo")")
+
+	castling=$(updatecastling "$castling" "$from" "$to")
+	enpassant=$(newenpassant "$placement" "$piece" "$from" "$to")
+	halfmove=$(newhalfmove "$halfmove" "$piece" "$captured" "$epsqr")
+	[ "$active" == "b" ] && fullmove=$((fullmove + 1))
+	[ "$active" == "w" ] && active=b || active=w
+
+	echo "$placement $active $castling $enpassant $halfmove $fullmove"
+}
+
 # applies UCI moves directly to a FEN position
 echo "applymoves <fen> <ucimove> ... - returns FEN after applying the given moves"
 applymoves() {
@@ -79,123 +184,14 @@ applymoves() {
 	fi
 	local fen=$1
 	shift
-	if [ "$fen" == "startpos" ] ; then
-		fen="$(startpos)"
-	fi
+	[ "$fen" == "startpos" ] && fen="$(startpos)"
 	[ "$1" == "moves" ] && shift
 
-	local placement active castling enpassant halfmove fullmove
-	read placement active castling enpassant halfmove fullmove <<< "$fen"
-
 	while (($#)) ; do
-		local move=$1 ; shift
-		local from=${move:0:2} to=${move:2:2} promo=${move:4:1}
-
-		local piece captured
-		piece=$(fenget "$placement" "$from")
-		captured=$(fenget "$placement" "$to")
-
-		# Detect en passant capture: pawn moves to the en passant square
-		local ep_capture=0
-		if [ "$enpassant" != "-" ] && [ "$to" == "$enpassant" ] ; then
-			if [ "$piece" == "P" ] || [ "$piece" == "p" ] ; then
-				ep_capture=1
-			fi
-		fi
-
-		# Remove piece from source square
-		placement=$(fenput "$placement" "$from" "_")
-
-		# En passant: remove the captured pawn behind the to-square
-		if [ $ep_capture -eq 1 ] ; then
-			local ep_rank=${to:1:1}
-			if [ "$piece" == "P" ] ; then
-				placement=$(fenput "$placement" "${to:0:1}$((ep_rank - 1))" "_")
-			else
-				placement=$(fenput "$placement" "${to:0:1}$((ep_rank + 1))" "_")
-			fi
-		fi
-
-		# Castling: implicitly move the rook
-		if [ "$piece" == "K" ] ; then
-			case "$move" in
-				e1g1) placement=$(fenput "$placement" h1 _)
-					  placement=$(fenput "$placement" f1 R) ;;
-				e1c1) placement=$(fenput "$placement" a1 _)
-					  placement=$(fenput "$placement" d1 R) ;;
-			esac
-		elif [ "$piece" == "k" ] ; then
-			case "$move" in
-				e8g8) placement=$(fenput "$placement" h8 _)
-					  placement=$(fenput "$placement" f8 r) ;;
-				e8c8) placement=$(fenput "$placement" a8 _)
-					  placement=$(fenput "$placement" d8 r) ;;
-			esac
-		fi
-
-		# Place piece at destination, promoting if specified
-		if [ -n "$promo" ] ; then
-			local promo_piece
-			if [ "$active" == "w" ] ; then
-				case "$promo" in
-				q) promo_piece=Q ;; r) promo_piece=R ;;
-				b) promo_piece=B ;; n) promo_piece=N ;;
-				esac
-			else
-				promo_piece=$promo
-			fi
-			placement=$(fenput "$placement" "$to" "$promo_piece")
-		else
-			placement=$(fenput "$placement" "$to" "$piece")
-		fi
-
-		# Update castling rights based on king/rook moves and rook captures
-		[[ "$from" == "e1" ]] && castling="${castling//K/}" && castling="${castling//Q/}"
-		[[ "$from" == "h1" || "$to" == "h1" ]] && castling="${castling//K/}"
-		[[ "$from" == "a1" || "$to" == "a1" ]] && castling="${castling//Q/}"
-		[[ "$from" == "e8" ]] && castling="${castling//k/}" && castling="${castling//q/}"
-		[[ "$from" == "h8" || "$to" == "h8" ]] && castling="${castling//k/}"
-		[[ "$from" == "a8" || "$to" == "a8" ]] && castling="${castling//q/}"
-		[ -z "$castling" ] && castling="-"
-
-		# Set en passant square on double pawn push only if enemy pawn can capture
-		enpassant="-"
-		local to_file="${to:0:1}" to_rank="${to:1:1}"
-		if [[ "$piece" == "P" && "${from:1:1}" == "2" && "$to_rank" == "4" ]] || \
-		   [[ "$piece" == "p" && "${from:1:1}" == "7" && "$to_rank" == "5" ]] ; then
-			local lf="" rf=""
-			case $to_file in
-			a) rf="b" ;;
-			b) lf="a" ; rf="c" ;; c) lf="b" ; rf="d" ;;
-			d) lf="c" ; rf="e" ;; e) lf="d" ; rf="f" ;;
-			f) lf="e" ; rf="g" ;; g) lf="f" ; rf="h" ;;
-			h) lf="g" ;;
-			esac
-			local enemy_pawn lp="" rp=""
-			[ "$piece" == "P" ] && enemy_pawn="p" || enemy_pawn="P"
-			[ -n "$lf" ] && lp=$(fenget "$placement" "${lf}${to_rank}")
-			[ -n "$rf" ] && rp=$(fenget "$placement" "${rf}${to_rank}")
-			if [ "$lp" == "$enemy_pawn" ] || [ "$rp" == "$enemy_pawn" ] ; then
-				[ "$piece" == "P" ] && enpassant="${to_file}3" || enpassant="${to_file}6"
-			fi
-		fi
-
-		# Halfmove clock: reset on pawn move or capture
-		if [ "$piece" == "P" ] || [ "$piece" == "p" ] || \
-		   [ "$captured" != "_" ] || [ $ep_capture -eq 1 ] ; then
-			halfmove=0
-		else
-			halfmove=$((halfmove + 1))
-		fi
-
-		# Fullmove counter: increment after black's move
-		[ "$active" == "b" ] && fullmove=$((fullmove + 1))
-
-		# Toggle active side
-		if [ "$active" == "w" ] ; then active="b" ; else active="w" ; fi
+		fen=$(applymove "$fen" "$1")
+		shift
 	done
-
-	echo "$placement $active $castling $enpassant $halfmove $fullmove"
+	echo "$fen"
 }
 
 export esc="\\033["
