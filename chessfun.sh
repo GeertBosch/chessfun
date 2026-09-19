@@ -178,13 +178,17 @@ applymove() {
 echo "applymoves <fen> <ucimove> ... - returns FEN after applying the given moves"
 applymoves() {
 	[ $# -eq 1 ] && [[ "$1" == *" "* ]] && set -- $1 # treat single arg with spaces as multiple args
-	if (($# < 2)) ; then
+	local fen
+	if [ "$1" == "startpos" ] ; then
+		fen=$(startpos)
+		shift
+	elif (($# >= 6)) ; then
+		fen="$1 $2 $3 $4 $5 $6" # a FEN spells out its six fields as separate arguments
+		shift 6
+	else
 		echo "applymoves <fen> <ucimove> ..."
 		return 1
 	fi
-	local fen=$1
-	shift
-	[ "$fen" == "startpos" ] && fen="$(startpos)"
 	[ "$1" == "moves" ] && shift
 
 	while (($#)) ; do
