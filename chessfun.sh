@@ -8,12 +8,20 @@ error() {
 	exit "$code"
 }
 
+# spacedargs - prints each argument with a leading space
+spacedargs() {
+	while (($#)) ; do
+		printf " %s" "$1"
+		shift
+	done
+}
+
 echo "startpos - outputs the FEN for the standard starting position"
 startpos() {
 		echo "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 }
 
-echo "expfen <fen> - expands a FEN placement so empty squares become '_'"
+# expfen <fen> - expands a FEN placement so empty squares become '_'
 expfen() {
 	(($# == 1)) || error "expfen <fen>"
 	set - $1
@@ -24,10 +32,7 @@ expfen() {
 		underscores="_$underscores"
 		exp=${exp//$i/$underscores}
 	done
-	while [ $# -ge 1 ] ; do
-			exp="$exp $1"
-			shift
-	done
+	exp="$exp$(spacedargs "$@")"
 	echo "$exp"
 }
 
@@ -41,16 +46,13 @@ normplmt() {
 	echo "$norm"
 }
 
-echo "normfen <fen> - normalizes FEN, reversing expfen"
+# normfen <fen> - normalizes FEN, reversing expfen
 normfen() {
 	(($# == 1)) || error "normfen <fen>"
 	set - $(expfen "$1")
 	local norm=$(normplmt "$1")
 	shift
-	while [ $# -ge 1 ] ; do
-		norm="$norm $1"
-		shift
-	done
+	norm="$norm$(spacedargs "$@")"
 	echo "$norm"
 }
 
@@ -59,21 +61,16 @@ fensqrpos() {
 	echo $(( 9*$(( 8 - ${1:1:1} )) + $(( $(printf '%d' "'${1:0:1}") - 97 )) ))
 }
 
-echo "fenget <placement> <square> - returns piece at square; '_' for empty"
+# fenget <placement> <square> - returns piece at square; '_' for empty
 fenget() {
 	local exp=$(expfen "$1") pos=$(fensqrpos "$2")
 	echo "${exp:pos:1}"
 }
 
-echo "fenput <placement> <square> <piece> - returns placement with piece at square; '_' to clear"
+# fenput <placement> <square> <piece> - returns placement with piece at square; '_' clears
 fenput() {
 	local exp=$(expfen "$1") pos=$(fensqrpos "$2")
 	normplmt "${exp:0:$pos}$3${exp:$((pos+1))}"
-}
-
-# ispawn <piece> - true if the piece is a pawn of either color
-ispawn() {
-	[[ "$1" == [Pp] ]]
 }
 
 # sqrshift <square> <filedelta> <rankdelta> - square shifted by the deltas, empty if off the board
@@ -84,13 +81,13 @@ sqrshift() {
 	echo "${files:file:1}$rank"
 }
 
-# epvictim <piece> <to> <enpassant> - square of the pawn captured en passant, empty if no such capture
+# epvictim <piece> <to> <enpassant> - square of the en passant captured piece, or empty if none
 epvictim() {
-	ispawn "$1" && [ "$3" != "-" ] && [ "$2" == "$3" ] || return 0
+	[[ "$1" == [Pp] ]] && [ "$3" != "-" ] && [ "$2" == "$3" ] || return 0
 	[ "$1" == "P" ] && sqrshift "$2" 0 -1 || sqrshift "$2" 0 1
 }
 
-# movecastlingrook <placement> <piece> <ucimove> - placement with the castling rook relocated, if castling
+# movecastlingrook <placement> <piece> <ucimove> - placement with the rook relocated, if castling
 movecastlingrook() {
 	local placement=$1 rookfrom rookto rook
 	case "$2$3" in
@@ -104,13 +101,11 @@ movecastlingrook() {
 	fenput "$placement" "$rookto" "$rook"
 }
 
-# promotedpiece <piece> <promo> - the piece to put on the destination square, promoting if promo is given
+# promotedpiece <piece> <promo> - piece to put on the to-square, promoting if promo is given
 promotedpiece() {
 	[ -n "$2" ] || { echo "$1" ; return ; }
-	[ "$1" == "P" ] || { echo "$2" ; return ; } # black promotion letters need no mapping
-	case "$2" in
-	q) echo Q ;; r) echo R ;; b) echo B ;; n) echo N ;;
-	esac
+	[ "$1" == "p" ] && echo "$2"  # black promotion letters need no mapping
+	[ "$1" == "P" ] && echo "$2" | tr qrbn QRBN
 }
 
 # updatecastling <castling> <from> <to> - castling rights after a move touching the given squares
@@ -147,9 +142,10 @@ newenpassant() {
 	echo "-"
 }
 
-# newhalfmove <halfmove> <piece> <captured> <epvictim> - halfmove clock, reset by pawn moves and captures
+# newhalfmove <halfmove> <piece> <captured> <epvictim> - halfmove clock, reset by pawn moves and
+# captures
 newhalfmove() {
-	ispawn "$2" || [ "$3" != "_" ] || [ -n "$4" ] && echo 0 || echo $(($1 + 1))
+	[[ "$2" == [Pp] ]] || [ "$3" != "_" ] || [ -n "$4" ] && echo 0 || echo $(($1 + 1))
 }
 
 # applymove <fen> <ucimove> - returns the FEN after applying a single UCI move
@@ -177,7 +173,7 @@ applymove() {
 }
 
 # applies UCI moves directly to a FEN position
-echo "applymoves <fen> <ucimove> ... - returns FEN after applying the given moves"
+echo "applymoves <fen> [\"moves\"] <ucimove> ... - returns FEN after applying the given moves"
 applymoves() {
 	[ $# -eq 1 ] && [[ "$1" == *" "* ]] && set -- $1 # treat single arg with spaces as multiple args
 	local fen
@@ -199,8 +195,7 @@ applymoves() {
 	echo "$fen"
 }
 
-export esc="\\033["
-echo "setfg [color256] - sets the terminal foreground color to the given index, or reset"
+# setfg [color256] - sets the terminal foreground color to the given index, or reset
 setfg() {
 	if (($# < 1)) ; then
 		printf "\\E[0m"
@@ -209,7 +204,7 @@ setfg() {
 	fi
 }
 
-echo "setbg [color256] - sets the terminal background color to the given index, or reset"
+# setbg [color256] - sets the terminal background color to the given index, or reset
 setbg() {
 	if (($# < 1)) ; then
 		printf "\\E[49m"
@@ -217,28 +212,26 @@ setbg() {
 		printf "\\E[48;5;$1m"
 	fi
 }
-export lg="\\E[48;5;187m" # light green background
-export dg="\\E[48;5;64m" # dark green background
-export lh="▌" # left half block
-export rh="▐" # right half block
 
-echo "decdhl <text> - prints text using double width/height excape sequences when supported"
+# decdhl <text> - prints text using double width/height excape sequences when supported
 decdhl() {
 	if [ "$TERM_PROGRAM" = "Apple_Terminal" ] ; then
-		echo -e "\033#3$*"
-		echo -e "\033#4$*"
+		echo -e "\033#3$*\n\033#4$*\n"
 	else
 		echo -e "$*"
 	fi
 }
 
 
-echo "chessrow <bg1> <bg2> <fenrow> - prints a chess row with alternating background colors"
+# chessrow <bg1> <bg2> <fenrow> - prints a chess row with alternating background colors
 chessrow() {
 	(($# >= 3)) || error "chessrow <bg1> <bg2> <fenrow>"
 	bg1=$1
 	bg2=$2
 	row=$(echo "$3" | tr "." " ")
+	local lh="▌" # left half block
+	local rh="▐" # right half block
+
 	for (( i=0; i<${#row}; i++ )) ; do
 		ch=${row:$i:1}
 		case $ch in
@@ -258,8 +251,8 @@ chessrow() {
 echo "chessboard <fen> - prints a chess board for the given FEN piece placement"
 chessboard() {
 	(($# >= 1)) || error "chessboard <fen>"
-	bg1=187
-	bg2=64
+	bg1=187 # light green
+	bg2=64 # dark green
 	set - $(echo "$(expfen $*)" | tr '/' '\n')
 	while [ $# -gt 0 ] ; do
 		decdhl $(chessrow $bg1 $bg2 "$1")
@@ -272,33 +265,15 @@ chessboard() {
 
 echo "flip <fen> - flips white and black pieces and perspective in a FEN string"
 flip() {
-	(($# >= 1)) || error "flip <fen>"
-	echo -n $(echo "$1" | tr '/' '\n' | tail -r | rev) | tr ' ' '/'
-	shift
-	if (($# >= 1)) ; then
-		case $1 in
-		b|B) side=w ;;
-		w|W) side=b ;;
-		*) side=w ;;
-		esac
-		echo -n " $side"
-		shift
-	fi
-	# flip castling rights: swap K and k, Q and q, and output uppercase before lowercase
-	if (($# >= 1)) ; then
-		echo -n " ${1//[^KQ]/}${1//[^kq-]/}" | tr 'KQkq' 'kqKQ'
-		shift
-	fi
-	# flip en passant square: swap 3 and 6 ranks and reverse file order
-	if (($# >= 1)) ; then
-		echo -n " $1" | tr '36abcdefgh' '63hgfedcba'
-		shift
-	fi
-	# halfmove and fullmove don't need to be flipped, just printed in order if present
-	while (($# != 0)) ; do
-		echo -n " $1"
-		shift
-	done
+	(($# == 1 || $# >= 5)) || error "flip <fen>" # either placement or full FEN
+
+	echo -n $(echo "$1" | tr '/' '\n' | tail -r | rev) | tr ' ' '/' ; shift # flip placement
+	(($#)) || { echo ""; return; }
+
+	echo -n " $1" | tr 'bB' 'wW'; shift # flip the side to move
+	echo -n " ${1//[^KQ]/}${1//[^kq-]/}" | tr 'KQkq' 'kqKQ'; shift # flip castling rights
+	echo -n " $1" | tr '36abcdefgh' '63hgfedcba'; shift # flip en passant square
+	printf "%s" "$(spacedargs "$@")" # no flipping counters
 	echo ""
 }
 
@@ -321,16 +296,16 @@ go depth $depth
 echo "nnue <fen> - prints Stockfish's NNUE evaluation for the given FEN position"
 nnue() {
 	(($# >= 1)) || error "nnue <fen>"
-		fen=$1
-		shift
-		echo "\
+	fen=$1
+	shift
+	echo "\
 uci
 position fen \"$fen\"
 eval
 " | stockfish | grep "^NNUE eval"
 }
 
-# Use perft divisions to check against perft at lower depth
+# Use perft divisions to check perft against itself at lower depth
 echo "checkperft <fen> <depth>"
 checkperft() {
 	./perft "$1" $2 |
@@ -346,7 +321,6 @@ checkperft() {
 		END { print "Nodes searched: " total }
 	'
 }
-
 
 # Compare a perft run on a  base FEN position followed by some moves at the given depth
 perftdiff() {

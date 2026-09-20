@@ -9,16 +9,14 @@ passed=0 failed=0
 
 # check <expected> <command> [arg ...] - runs the command, comparing its output (stderr included)
 check() {
-	local want=$1 got ; shift
-	got=$("$@" 2>&1)
-	if [ "$got" == "$want" ] ; then
-		passed=$((passed + 1))
-	else
-		failed=$((failed + 1))
-		echo "FAIL: $*"
-		echo "  expected: $want"
-		echo "  actual  : $got"
-	fi
+	local want=$1 ; shift
+	local got=$("$@" 2>&1)
+	[ "$got" == "$want" ] && { passed=$((passed + 1)) ; return ; }
+
+	failed=$((failed + 1))
+	echo "FAIL: $*"
+	echo "  expected: $want"
+	echo "  actual  : $got"
 }
 
 # checktrue <command> [arg ...] - expects the command to succeed without output
@@ -75,10 +73,6 @@ check "f3" sqrshift e4 1 -1
 check "" sqrshift a1 -1 0
 check "" sqrshift h8 0 1
 check "a8" sqrshift a1 0 7
-checktrue ispawn P
-checktrue ispawn p
-checkfalse ispawn K
-checkfalse ispawn _
 check "d5" epvictim P d6 d6		# white captures the black pawn on d5
 check "a4" epvictim p a3 a3		# black captures the white pawn on a4
 check "" epvictim N d6 d6		# only pawns capture en passant
